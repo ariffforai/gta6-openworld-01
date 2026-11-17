@@ -88,6 +88,14 @@ const camTarget = { position: new THREE.Vector3(), lookAt: new THREE.Vector3() }
 
 function announce(msg) { status.textContent = msg; }
 
+// Pointer lock can fail in headless browsers: never let it break the game.
+function lockPointer() {
+  try {
+    const r = canvas.requestPointerLock?.();
+    if (r && typeof r.catch === 'function') r.catch(() => {});
+  } catch { /* pointer lock unavailable */ }
+}
+
 function saveGame() {
   writeSave({
     money: player.money,
@@ -129,7 +137,7 @@ function startGame(fresh) {
   hud.toast('Welcome to Solmar. Press T to take a job from Nadia.', 5);
   hud.setHint('WASD move · E enter car · T next job · M mute · P pause');
   announce('Playing. Welcome to Solmar.');
-  canvas.requestPointerLock?.();
+  lockPointer();
 }
 
 function endGame(kind) {
@@ -434,7 +442,7 @@ function resumeGame() {
   pauseEl.classList.add('hidden');
   document.body.classList.add('playing');
   state = 'playing';
-  canvas.requestPointerLock?.();
+  lockPointer();
   announce('Playing.');
 }
 
