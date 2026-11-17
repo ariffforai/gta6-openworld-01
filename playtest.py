@@ -164,12 +164,16 @@ AUTOPILOT_JS = """() => {
         K['KeyA'] = diff < -0.1; K['KeyD'] = diff > 0.1;
       } else {
         K['KeyS'] = false;
-        // Keep the car around 8-10 u/s: fast enough to steer (steering
-        // scales with speed), slow enough that one control tick — about
-        // one frame on this slow renderer — never carries it far off the
-        // 12-wide road. Do not accelerate while badly misaligned, or the
-        // car drives off the road before the turn bites.
-        K['KeyW'] = Math.abs(car.speed) < 10 && Math.abs(diff) < 0.9;
+        // Keep the car around 8-10 u/s on the open road: fast enough to
+        // steer (steering scales with speed), slow enough that one
+        // control tick — about one frame on this slow renderer — never
+        // carries it far off the 12-wide road. Do not accelerate while
+        // badly misaligned, or the car drives off the road before the
+        // turn bites. And crawl on the final approach: the arrival check
+        // runs once per frame, so at full speed the car can pass straight
+        // through the small delivery circle between ticks.
+        const cruise = d < 20 ? 4 : 10;
+        K['KeyW'] = Math.abs(car.speed) < cruise && Math.abs(diff) < 0.9;
         K['KeyA'] = diff < -0.15; K['KeyD'] = diff > 0.15;
         if (now - ap.lastProgress > 3 && Math.abs(car.speed) < 2) {
           ap.reverseUntil = now + 2.5; ap.lastProgress = now;
