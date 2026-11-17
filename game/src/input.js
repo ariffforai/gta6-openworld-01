@@ -33,7 +33,13 @@ export class Input {
     });
   }
   down(code) { return !!this.keys[code]; }
-  hit(code) { return !!this.pressed[code]; }
+  // Edge-triggered: true once per physical press, however many fixed steps
+  // run in one frame, so E never enters and exits a car in the same frame.
+  hit(code) {
+    const v = !!this.pressed[code];
+    if (v) this.pressed[code] = false;
+    return v;
+  }
   axis(neg, pos) { return (this.down(pos) ? 1 : 0) - (this.down(neg) ? 1 : 0); }
   consumeMouse() {
     const dx = this.mouseDX, dy = this.mouseDY;
