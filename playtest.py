@@ -249,13 +249,18 @@ class Driver:
             time.sleep(0.5)
         raise RuntimeError("game never reached playing state")
 
-    def move_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None):
+    def move_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None, bailout=90):
         """Hand the target to the in-page autopilot and wait for arrival.
         stop_when(state) ends the move early — e.g. the moment an interact
-        prompt appears, so the driver never has to land exactly on the point."""
+        prompt appears, so the driver never has to land exactly on the point.
+        bailout: if the car has not arrived after this many seconds, step
+        out and walk the rest — the missions check the player's position,
+        not the car, so walking still verifies the stage, and the on-foot
+        autopilot does not wedge the way a car can at 1.7 fps."""
         t0 = time.time()
         self.ap_set(tx, tz, radius)
         polls = 0
+        bailed = False
         try:
             while True:
                 s = self.state()
@@ -276,11 +281,19 @@ class Driver:
                 if time.time() - t0 > timeout:
                     raise RuntimeError(f"timeout driving to {label or (tx, tz)} "
                                        f"(still {d:.0f}m away, health {s['health']:.0f})")
+                if not bailed and s["inCar"] and time.time() - t0 > bailout:
+                    # The car is wedged; abandon it and walk. The autopilot
+                    # switches to on-foot mode on its own (pl.inCar false).
+                    self.note(f"  car stuck on the way to {label or (tx, tz)} — stepping out to walk")
+                    self.page.keyboard.press("KeyE")
+                    time.sleep(0.8)
+                    bailed = True
+                    t0 = time.time()
                 time.sleep(1.0)
         finally:
             self.ap_stop()
 
-    def go_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None):
+    def go_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None, bailout=90):
         """Follow the road grid to (tx,tz): waypoints at intersections, then
         the final approach. Works on foot and in a car."""
         s = self.state()
@@ -304,16 +317,16 @@ class Driver:
         for i, (wx, wz) in enumerate(pts):
             # Intermediate waypoints use a wide radius so the car starts
             # its (wide) turn at the intersection early — the turning
-            # circle is ~18 units, so it must be turning well before the
+            # circle is ~13 units, so it must be turning well before the
             # corner or it overshoots into the building on the far side.
             r = radius if i == len(pts) - 1 else 25
-            s = self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}", stop_when=stop_when)
+            s = self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}", stop_when=stop_when, bailout=bailout)
             if stop_when and stop_when(s):
                 return s
         return self.state()
 
-    def drive_route(self, tx, tz, radius=5, timeout=900, label=""):
-        return self.go_to(tx, tz, radius=radius, timeout=timeout, label=label)
+    def drive_route(self, tx, tz, radius=5, timeout=900, label="", bailout=90):
+        return self.go_to(tx, tz, radius=radius, timeout=timeout, label=label, bailout=bailout)
 
     def steal_nearest_car(self, timeout=600):
         """Walk to the nearest parked car and press E the moment the steal
@@ -476,7 +489,7 @@ def main():
             d.note(f"courier picked up: stage={s['stage']}, timeLeft={s['timeLeft']:.0f}s, "
                    f"stars={s['stars']}, objective={s['objective']}")
             assert s["stage"] == 1 and s["timeLeft"] > 60, "timed stage did not start"
-            d.drive_route(156, 268, radius=6, label="yacht")
+            d.drive_route(156, 268, radius=6, label="yacht", bailout=40)
             s = d.state()
             d.note(f"MISSION 4 DONE — money ${s['money']}, done={s['done']}, allDone={s['allDone']}, "
                    f"stashes left={s['stashesLeft']}")
