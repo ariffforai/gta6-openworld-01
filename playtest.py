@@ -458,17 +458,19 @@ def main():
             s = d.state()
             d.note(f"coupe stolen: inCar={s['inCar']}, stars={s['stars']}, objective={s['objective']}")
             assert s["inCar"] and s["stage"] == 1, "coupe steal did not advance the mission"
-            # Drive-by check: hold the trigger for a short burst while the
-            # car drives away from the marina and confirm the mechanic runs
-            # without errors. Only a burst — holding it for a whole leg
-            # maxes the wanted level and the police ram the car into a
-            # wedge, and stepping out on foot at 5 stars is a bust.
+            # Drive-by: fire a short burst from the moving coupe as it
+            # leaves the marina. Every shot adds 4 heat, so a long burst
+            # maxes wanted and the police ram the car into a wedge — one
+            # second proves the mechanic. Drive forward in the car's own
+            # heading, then hand off to the chop-shop route.
+            s = d.state()
+            hx, hz = math.sin(s["heading"]), math.cos(s["heading"])
             page.mouse.move(W // 2, H // 2)
             page.mouse.down()
-            d.ap_set(104, 156, 8)
-            time.sleep(8)
+            d.ap_set(s["x"] + hx * 60, s["z"] + hz * 60, 10)
+            time.sleep(1)
             page.mouse.up()
-            d.move_to(104, 156, radius=8, timeout=180, label="drive-by leg")
+            d.ap_stop()
             d.note(f"drive-by fired while driving: stars={d.state()['stars']}, heat={d.state()['heat']:.0f}")
             d.drive_route(-130, -104, radius=5, label="chop shop")
             s = d.state()
