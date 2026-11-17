@@ -395,7 +395,7 @@ function step(dt) {
   saveT += dt;
   if (saveT > 20) { saveT = 0; saveGame(); }
 
-  // Camera.
+  // Camera. Never let it sit inside a building: lift it above the roof.
   if (shotName === 'city') {
     camPos.set(-140 + Math.sin(now * 0.05) * 20, 150, -140 + Math.cos(now * 0.05) * 20);
     camLook.set(0, 0, 40);
@@ -404,6 +404,12 @@ function step(dt) {
     const k = 1 - Math.exp(-10 * dt);
     camPos.lerp(camTarget.position, k);
     camLook.lerp(camTarget.lookAt, k);
+  }
+  for (const b of city.colliders) {
+    if (camPos.x > b.minX - 0.5 && camPos.x < b.maxX + 0.5 &&
+        camPos.z > b.minZ - 0.5 && camPos.z < b.maxZ + 0.5 && camPos.y < b.h + 2) {
+      camPos.y = b.h + 2;
+    }
   }
   camera.position.copy(camPos);
   camera.lookAt(camLook);
@@ -480,15 +486,10 @@ if (shotName) {
     startGame, SEED,
   });
   // Run the staged scene live for a couple of seconds so traffic, police and
-  // the camera settle before the screenshot.
+  // the camera settle before the screenshot. Auto-drive holds W through the
+  // normal input path so the car drives like a player would.
   if (shotScript?.autoDrive) {
-    const iv = setInterval(() => {
-      if (player.inCar && player.car) {
-        player.car.drive(0.8, Math.sin(now * 0.4) * 0.25, false, STEP, city.colliders);
-        player.x = player.car.x; player.z = player.car.z;
-      }
-    }, 16);
-    setTimeout(() => clearInterval(iv), 2600);
+    input.keys['KeyW'] = true;
   }
   state = 'playing';
   menuEl.classList.add('hidden');

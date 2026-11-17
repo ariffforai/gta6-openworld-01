@@ -18,11 +18,11 @@ export function stageShot(name, ctx) {
   player.spawn(0, 40, 0);
 
   if (shot === 'cover' || shot === 'chase') {
-    // Jules driving downtown with the Solmar PD on his tail, mid-mission.
+    // Jules driving down a Downtown avenue with the Solmar PD on his tail.
     const car = traffic.parked[0] || traffic.cars[0];
     if (car) {
       traffic.removeParked(car);
-      car.x = -26; car.z = -60; car.heading = 0; car.speed = 16;
+      car.x = 0; car.z = -104; car.heading = 0; car.speed = 16;
       player.enterCar(car);
     }
     wanted.heat = shot === 'chase' ? 62 : 42;

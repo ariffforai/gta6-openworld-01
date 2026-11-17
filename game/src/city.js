@@ -92,8 +92,8 @@ export class City {
     }
     return best;
   }
-  addCollider(x, z, w, d) {
-    this.colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
+  addCollider(x, z, w, d, h) {
+    this.colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, h: h || 30 });
   }
   build() {
     const rng = this.rng;
@@ -198,7 +198,7 @@ export class City {
             new THREE.MeshLambertMaterial({ color: 0x3a3f47 }));
           roof.position.set(bx0, h + 0.5, bz0);
           scene.add(roof);
-          this.addCollider(bx0, bz0, w, d);
+          this.addCollider(bx0, bz0, w, d, h);
         }
         // Palms + lamps around the block edges.
         const palmSpots = 2 + Math.floor(rng() * 3);
@@ -227,7 +227,7 @@ export class City {
       new THREE.MeshLambertMaterial({ map: towerTex }));
     tower.position.set(-26, 55.2, 78); tower.castShadow = true;
     scene.add(tower);
-    this.addCollider(-26, 78, 26, 26);
+    this.addCollider(-26, 78, 26, 26, 110);
     const beacon = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 8),
       new THREE.MeshBasicMaterial({ color: 0xff4040 }));
     beacon.position.set(-26, 111, 78); scene.add(beacon);
@@ -244,7 +244,7 @@ export class City {
     const lightTop = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 3, 10),
       new THREE.MeshLambertMaterial({ color: 0xc23b2e }));
     lightTop.position.set(190, 23, CITY_R + 30); scene.add(lightTop);
-    this.addCollider(190, CITY_R + 30, 7, 7);
+    this.addCollider(190, CITY_R + 30, 7, 7, 24);
     // Beach umbrellas.
     for (let i = 0; i < 8; i++) {
       const ux = -180 + i * 52 + rng() * 20;
