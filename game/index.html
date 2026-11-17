@@ -3,16 +3,137 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>SOLMAR — Streets of Fortune</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1020;
+    font-family: "Trebuchet MS", Verdana, sans-serif; color: #fff; }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .hidden { display: none !important; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #topbar { position: absolute; top: 12px; left: 14px; right: 14px; display: flex;
+    justify-content: space-between; align-items: flex-start; }
+  #money { font-size: 26px; font-weight: bold; color: #7dff9a;
+    text-shadow: 0 2px 4px rgba(0,0,0,.8); }
+  #money small { display: block; font-size: 12px; color: #cfe8d4; font-weight: normal; }
+  #wanted { font-size: 30px; letter-spacing: 4px; text-shadow: 0 2px 6px rgba(0,0,0,.9); }
+  #wanted .star { color: #334; }
+  #wanted .star.lit { color: #ffd23e; }
+  #healthbar { width: 220px; height: 14px; background: rgba(0,0,0,.55);
+    border: 1px solid rgba(255,255,255,.5); border-radius: 3px; margin-top: 6px; }
+  #healthfill { height: 100%; width: 100%; background: linear-gradient(90deg,#37d67a,#a5f2b0); }
+  #armorbar { width: 220px; height: 8px; background: rgba(0,0,0,.55);
+    border: 1px solid rgba(255,255,255,.35); border-radius: 3px; margin-top: 3px; }
+  #armorfill { height: 100%; width: 0%; background: #6db7ff; }
+  #objective { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    max-width: 560px; text-align: center; font-size: 17px; font-weight: bold;
+    text-shadow: 0 2px 4px rgba(0,0,0,.9); background: rgba(0,0,0,.35);
+    padding: 6px 14px; border-radius: 6px; }
+  #objective .dist { color: #ffd23e; }
+  #minimap { position: absolute; left: 14px; bottom: 14px; width: 190px; height: 190px;
+    border: 2px solid rgba(255,255,255,.65); border-radius: 50%;
+    background: rgba(8,14,28,.85); box-shadow: 0 0 0 4px rgba(0,0,0,.35); }
+  #speedo { position: absolute; right: 16px; bottom: 16px; text-align: right;
+    font-size: 30px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,.9); }
+  #speedo small { display: block; font-size: 12px; color: #ddd; font-weight: normal; }
+  #ammo { position: absolute; right: 16px; bottom: 96px; font-size: 20px; font-weight: bold;
+    text-shadow: 0 2px 4px rgba(0,0,0,.9); }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+    transform: translate(-50%,-50%); }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff;
+    box-shadow: 0 0 3px #000; }
+  #crosshair::before { left: 10px; top: 0; width: 2px; height: 22px; }
+  #crosshair::after { left: 0; top: 10px; width: 22px; height: 2px; }
+  #toast { position: absolute; left: 50%; bottom: 210px; transform: translateX(-50%);
+    font-size: 19px; font-weight: bold; text-align: center;
+    text-shadow: 0 2px 4px rgba(0,0,0,.95); }
+  #hint { position: absolute; left: 220px; bottom: 18px; font-size: 13px; color: #e8e8e8;
+    text-shadow: 0 1px 3px rgba(0,0,0,.9); max-width: 340px; line-height: 1.5; }
+  #interact { position: absolute; left: 50%; top: 58%; transform: translateX(-50%);
+    font-size: 17px; font-weight: bold; background: rgba(0,0,0,.6);
+    padding: 6px 12px; border-radius: 5px; border: 1px solid #ffd23e; }
+  .overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center;
+    justify-content: center; background: linear-gradient(160deg, rgba(8,18,44,.88), rgba(64,20,60,.82));
+    pointer-events: auto; }
+  .panel { max-width: 640px; width: 92%; text-align: center; padding: 28px 30px;
+    background: rgba(0,0,0,.45); border: 1px solid rgba(255,210,62,.55); border-radius: 12px; }
+  .panel h1 { margin: 0 0 2px; font-size: 64px; letter-spacing: 10px; color: #ffd23e;
+    text-shadow: 0 4px 0 #b3541e, 0 8px 22px rgba(0,0,0,.7); }
+  .panel h2 { margin: 0 0 14px; font-size: 19px; letter-spacing: 4px; color: #ffb3c8; font-weight: normal; }
+  .panel p { font-size: 15px; line-height: 1.55; color: #e8e8e8; }
+  .panel .keys { text-align: left; font-size: 14px; line-height: 1.8; margin: 14px auto 4px;
+    display: inline-block; color: #d8ecff; }
+  .panel .keys b { color: #ffd23e; }
+  button { pointer-events: auto; cursor: pointer; font-size: 19px; font-weight: bold;
+    padding: 12px 34px; margin: 10px 6px 0; border-radius: 8px; border: none;
+    background: #ffd23e; color: #201400; box-shadow: 0 4px 0 #b3541e; }
+  button:active { transform: translateY(3px); box-shadow: none; }
+  button.alt { background: #2b3a55; color: #fff; box-shadow: 0 4px 0 #101828; }
+  #bigmsg { position: fixed; left: 50%; top: 38%; transform: translate(-50%,-50%); z-index: 8;
+    font-size: 54px; font-weight: bold; letter-spacing: 6px; color: #ffd23e;
+    text-shadow: 0 4px 0 #7a2a12, 0 8px 24px rgba(0,0,0,.8); text-align: center; pointer-events: none; }
+  #bigmsg small { display: block; font-size: 20px; letter-spacing: 2px; color: #fff; margin-top: 8px; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
+<canvas id="scene"></canvas>
+<div id="hud" class="hidden">
+  <div id="topbar">
+    <div>
+      <div id="money">$0<small id="missionlabel">SOLMAR</small></div>
+      <div id="healthbar"><div id="healthfill"></div></div>
+      <div id="armorbar"><div id="armorfill"></div></div>
+    </div>
+    <div id="wanted"><span class="star">&#9733;</span><span class="star">&#9733;</span><span class="star">&#9733;</span><span class="star">&#9733;</span><span class="star">&#9733;</span></div>
+  </div>
+  <div id="objective">Welcome to Solmar</div>
+  <canvas id="minimap" width="190" height="190"></canvas>
+  <div id="speedo" class="hidden">0<small>MPH</small></div>
+  <div id="ammo" class="hidden">&#128267; &infin;</div>
+  <div id="crosshair" class="hidden"></div>
+  <div id="toast"></div>
+  <div id="hint"></div>
+  <div id="interact" class="hidden"></div>
+</div>
+<div id="bigmsg" class="hidden"></div>
+<div id="menu" class="overlay">
+  <div class="panel">
+    <h1>SOLMAR</h1>
+    <h2>STREETS OF FORTUNE</h2>
+    <p>Sun, sea and bad decisions. You are <b>Jules Marek</b>, a getaway driver back in
+    Solmar after three years away — broke, owed, and one favour away from trouble.
+    Fixer <b>Nadia Voss</b> has work for you. The city is yours: steal any car, outrun the
+    Solmar PD, and finish the jobs. An original open-world crime game.</p>
+    <div class="keys">
+      <b>W A S D</b> — move / drive &nbsp;·&nbsp; <b>Mouse</b> — look / aim<br>
+      <b>E</b> — enter / steal car &nbsp;·&nbsp; <b>Click</b> — shoot &nbsp;·&nbsp; <b>Space</b> — jump / handbrake<br>
+      <b>Shift</b> — sprint &nbsp;·&nbsp; <b>C</b> — camera &nbsp;·&nbsp; <b>M</b> — mute &nbsp;·&nbsp; <b>P / Esc</b> — pause
+    </div>
+    <div>
+      <button id="btn-start">START ENGINE</button>
+      <button id="btn-continue" class="alt hidden">CONTINUE</button>
+    </div>
+    <p id="saveinfo" style="font-size:13px;color:#9fb8d8"></p>
+  </div>
+</div>
+<div id="pause" class="overlay hidden">
+  <div class="panel">
+    <h1 style="font-size:40px;letter-spacing:6px">PAUSED</h1>
+    <p>Solmar waits. Your progress saves automatically after every job.</p>
+    <div><button id="btn-resume">RESUME</button>
+    <button id="btn-restart" class="alt">RESTART DAY</button></div>
+  </div>
+</div>
+<div id="endcard" class="overlay hidden">
+  <div class="panel">
+    <h1 id="endtitle" style="font-size:44px;letter-spacing:6px">WASTED</h1>
+    <p id="endtext"></p>
+    <div><button id="btn-retry">TRY AGAIN</button></div>
+  </div>
+</div>
 <p id="status" role="status" aria-live="polite"></p>
 <script type="module" src="./src/main.js"></script>
 </body>

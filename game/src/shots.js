@@ -1,79 +1,70 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Deterministic screenshot staging for SOLMAR: ?shot=cover|drive|chase|mission|city
+// puts the real game into a scene that shows its systems — driving, a police
+// chase, the marina shootout, or the city skyline — and lets it run live for a
+// couple of seconds so traffic, police and the camera settle before the shot.
+// The same seed always stages the same scene.
+import { MISSION_DEFS } from './missions.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+export function stageShot(name, ctx) {
+  const { player, missions, wanted, police, combat, traffic, peds, hud, city, startGame } = ctx;
+  const safe = (n) => ['cover', 'drive', 'chase', 'mission', 'city'].includes(n) ? n : 'cover';
+  const shot = safe(name);
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
+  // Start a fresh game in code (no menu, no pointer lock, no audio).
+  player.money = 2450;
+  player.health = 100;
+  player.armor = 50;
+  wanted.clear();
+  player.spawn(0, 40, 0);
+
+  if (shot === 'cover' || shot === 'chase') {
+    // Jules driving downtown with the Solmar PD on his tail, mid-mission.
+    const car = traffic.parked[0] || traffic.cars[0];
+    if (car) {
+      traffic.removeParked(car);
+      car.x = -26; car.z = -60; car.heading = 0; car.speed = 16;
+      player.enterCar(car);
     }
-  }
-  return Infinity;
-}
-
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
+    wanted.heat = shot === 'chase' ? 62 : 42;
+    wanted.stars = shot === 'chase' ? 3 : 2;
+    for (let i = 0; i < (shot === 'chase' ? 4 : 2); i++) {
+      police.spawnNear(player.x, player.z, 0);
     }
+    missions.start(1);
+    missions.stage = 1;
+    missions.showStage();
+    hud.toast('Nadia: "The coupe is hot. Lose them, then bring it to Old Town."', 6);
+    return { autoDrive: true };
   }
-  return best;
-}
 
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+  if (shot === 'drive') {
+    // A quiet cruise down the beach road at golden hour.
+    const car = traffic.parked[1] || traffic.cars[0];
+    if (car) {
+      traffic.removeParked(car);
+      car.x = 52; car.z = 220; car.heading = Math.PI; car.speed = 14;
+      player.enterCar(car);
+    }
+    hud.toast('Coral Beach — the long way home.', 5);
+    return { autoDrive: true };
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+
+  if (shot === 'mission') {
+    // On foot at the pier, pistol out, the Vultures waiting.
+    player.spawn(156, 250, 0);
+    input.mouseDown = true; // hold the trigger so the pistol stays out
+    missions.start(2);
+    missions.stage = 1;
+    missions.showStage();
+    combat.spawnEnemies([
+      { x: 150, z: 262 }, { x: 162, z: 272 }, { x: 146, z: 280 }, { x: 168, z: 258 },
+    ]);
+    hud.toast('Nadia: "It is that kind of meeting."', 5);
+    return { autoDrive: false };
   }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+
+  // city: the camera orbit in main.js does the work; just give it a lively street.
+  player.spawn(-26, 78, 0);
+  missions.start(0);
+  return { autoDrive: false };
 }
