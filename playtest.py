@@ -108,6 +108,7 @@ class Driver:
         reversing_until = 0
         sidestep_until = 0
         sidestep_dir = 1
+        polls = 0
         while True:
             s = self.state()
             if s is None:
@@ -121,6 +122,11 @@ class Driver:
             if d <= radius:
                 self.release_all()
                 return s
+            polls += 1
+            if polls % 40 == 1:
+                self.note(f"  ... to {label or (tx, tz)}: pos=({s['x']:.0f},{s['z']:.0f}) "
+                          f"d={d:.0f} speed={s['speed']:.1f} inCar={s['inCar']} "
+                          f"state={s['state']} interact='{s['interact']}'")
             if time.time() - t0 > timeout:
                 raise RuntimeError(f"timeout driving to {label or (tx, tz)} "
                                    f"(still {d:.0f}m away, health {s['health']:.0f})")
