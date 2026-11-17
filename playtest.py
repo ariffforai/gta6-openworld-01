@@ -184,7 +184,16 @@ AUTOPILOT_JS = """() => {
         K['KeyW'] = true;
         K['KeyA'] = ap.sideDir < 0; K['KeyD'] = ap.sideDir > 0;
       } else {
-        pl.camYaw = desired;
+        // Walk on the sidewalk, 8 units to the right of the direction of
+        // travel, so the traffic on the road does not run the player
+        // down — walking the centreline is lethal over a long leg.
+        // Within 15 units, aim straight at the target to arrive.
+        let aimX = ap.x, aimZ = ap.z;
+        if (d > 15) {
+          aimX = ap.x + Math.cos(desired) * 8;
+          aimZ = ap.z - Math.sin(desired) * 8;
+        }
+        pl.camYaw = Math.atan2(aimX - pl.x, aimZ - pl.z);
         K['KeyW'] = true;
         K['ShiftLeft'] = d > 12;
         K['KeyA'] = K['KeyD'] = false;
@@ -308,21 +317,6 @@ class Driver:
         s = self.state()
         dist0 = math.hypot(tx - s["x"], tz - s["z"])
         pts = road_route(s["x"], s["z"], tx, tz) if dist0 > 30 else [(tx, tz)]
-        if s["inCar"] and pts:
-            # Facing away from the route: do not U-turn mid-block (the
-            # car's turning circle is wider than the road). Drive forward
-            # along the road the car is on to the next intersection, turn
-            # there, and pick the route up from the far side.
-            desired0 = math.atan2(pts[0][0] - s["x"], pts[0][1] - s["z"])
-            if abs(ang_diff(s["heading"], desired0)) > 2.0:
-                h = s["heading"]
-                if abs(math.sin(h)) > abs(math.cos(h)):
-                    nx = (math.floor(s["x"] / 52) + 1) * 52 if math.sin(h) > 0 else (math.ceil(s["x"] / 52) - 1) * 52
-                    pts = [(nx, round(s["z"] / 52) * 52)] + pts
-                else:
-                    nz = (math.floor(s["z"] / 52) + 1) * 52 if math.cos(h) > 0 else (math.ceil(s["z"] / 52) - 1) * 52
-                    pts = [(round(s["x"] / 52) * 52, nz)] + pts
-                self.note(f"  facing away from route, driving forward to intersection {pts[0]} first")
         for i, (wx, wz) in enumerate(pts):
             # Intermediate waypoints use a wide radius so the car starts
             # its (wide) turn at the intersection early — the turning
