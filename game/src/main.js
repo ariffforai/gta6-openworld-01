@@ -470,7 +470,7 @@ function frame(t) {
   // Screenshot mode: stage, run the world a little, then signal readiness.
   if (shotName) {
     shotFrames++;
-    if (shotFrames === 150) window.__shotReady = true;
+    if (shotFrames === 100) window.__shotReady = true;
   }
 }
 

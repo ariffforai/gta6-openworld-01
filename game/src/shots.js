@@ -6,7 +6,7 @@
 import { MISSION_DEFS } from './missions.js';
 
 export function stageShot(name, ctx) {
-  const { player, missions, wanted, police, combat, traffic, peds, hud, city, startGame } = ctx;
+  const { player, missions, wanted, police, combat, traffic, peds, hud, city, input, startGame } = ctx;
   const safe = (n) => ['cover', 'drive', 'chase', 'mission', 'city'].includes(n) ? n : 'cover';
   const shot = safe(name);
 

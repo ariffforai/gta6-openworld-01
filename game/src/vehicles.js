@@ -3,7 +3,7 @@
 // that chase and ram the player.
 import * as THREE from 'three';
 import { clamp, lerp, angleDiff, mulberry32, dist2 } from './util.js';
-import { BLOCK, GRID } from './city.js';
+import { BLOCK, GRID, CITY_R } from './city.js';
 
 export const CAR_COLORS = [
   { name: 'Sunset Red', color: 0xc23b2e }, { name: 'Ocean Blue', color: 0x2e6fc2 },
