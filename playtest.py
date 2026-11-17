@@ -151,12 +151,13 @@ AUTOPILOT_JS = """() => {
         K['KeyA'] = diff < -0.1; K['KeyD'] = diff > 0.1;
       } else {
         K['KeyS'] = false;
-        // Keep the car around 8-12 u/s: fast enough to steer (steering
+        // Keep the car around 8-10 u/s: fast enough to steer (steering
         // scales with speed), slow enough that one control tick — about
         // one frame on this slow renderer — never carries it far off the
-        // 12-wide road.
-        K['KeyW'] = Math.abs(car.speed) < 12;
-        K['KeyA'] = diff < -0.1; K['KeyD'] = diff > 0.1;
+        // 12-wide road. Do not accelerate while badly misaligned, or the
+        // car drives off the road before the turn bites.
+        K['KeyW'] = Math.abs(car.speed) < 10 && Math.abs(diff) < 0.9;
+        K['KeyA'] = diff < -0.15; K['KeyD'] = diff > 0.15;
         if (now - ap.lastProgress > 3 && Math.abs(car.speed) < 2) {
           ap.reverseUntil = now + 2.5; ap.lastProgress = now;
         }
@@ -268,6 +269,21 @@ class Driver:
         s = self.state()
         dist0 = math.hypot(tx - s["x"], tz - s["z"])
         pts = road_route(s["x"], s["z"], tx, tz) if dist0 > 30 else [(tx, tz)]
+        if s["inCar"] and pts:
+            # Facing away from the route: do not U-turn mid-block (the
+            # car's turning circle is wider than the road). Drive forward
+            // along the road the car is on to the next intersection, turn
+            // there, and pick the route up from the far side.
+            desired0 = math.atan2(pts[0][0] - s["x"], pts[0][1] - s["z"])
+            if abs(ang_diff(s["heading"], desired0)) > 2.0:
+                h = s["heading"]
+                if abs(math.sin(h)) > abs(math.cos(h)):
+                    nx = (math.floor(s["x"] / 52) + 1) * 52 if math.sin(h) > 0 else (math.ceil(s["x"] / 52) - 1) * 52
+                    pts = [(nx, round(s["z"] / 52) * 52)] + pts
+                else:
+                    nz = (math.floor(s["z"] / 52) + 1) * 52 if math.cos(h) > 0 else (math.ceil(s["z"] / 52) - 1) * 52
+                    pts = [(round(s["x"] / 52) * 52, nz)] + pts
+                self.note(f"  facing away from route, driving forward to intersection {pts[0]} first")
         for i, (wx, wz) in enumerate(pts):
             # Intermediate waypoints use a wide radius so the car starts
             # its (wide) turn at the intersection early, instead of
