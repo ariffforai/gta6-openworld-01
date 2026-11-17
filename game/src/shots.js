@@ -30,6 +30,13 @@ export function stageShot(name, ctx) {
     for (let i = 0; i < (shot === 'chase' ? 4 : 2); i++) {
       police.spawnNear(player.x, player.z, 0);
     }
+    // One cruiser ahead as a roadblock, so the chase reads in the frame:
+    // it drives straight at the player while the others close in behind.
+    const blocker = police.cars[0];
+    if (blocker) {
+      blocker.x = 2.6; blocker.z = player.z + 70; blocker.heading = Math.PI;
+      blocker.speed = 12; blocker.syncMesh(0);
+    }
     missions.start(1);
     missions.stage = 1;
     missions.showStage();
