@@ -282,6 +282,15 @@ class Driver:
                     raise RuntimeError(f"timeout driving to {label or (tx, tz)} "
                                        f"(still {d:.0f}m away, health {s['health']:.0f})")
                 if not bailed and s["inCar"] and time.time() - t0 > bailout:
+                    if s["stars"] >= 3:
+                        # Stepping out on foot with the police this hot is a
+                        # bust: a cruiser within 9 units ends the game.
+                        # Stay in the car and keep working the reverse
+                        # recovery instead; the leg will time out if the
+                        # car truly cannot move.
+                        self.note(f"  car stuck near ({s['x']:.0f},{s['z']:.0f}) but stars={s['stars']} — staying in the car")
+                        t0 = time.time()
+                        continue
                     # The car is wedged; abandon it and walk. The autopilot
                     # switches to on-foot mode on its own (pl.inCar false).
                     self.note(f"  car stuck on the way to {label or (tx, tz)} — stepping out to walk")
@@ -443,12 +452,17 @@ def main():
             s = d.state()
             d.note(f"coupe stolen: inCar={s['inCar']}, stars={s['stars']}, objective={s['objective']}")
             assert s["inCar"] and s["stage"] == 1, "coupe steal did not advance the mission"
-            # Drive-by check: hold the trigger while driving away from the
-            # marina and confirm the mechanic runs without errors.
+            # Drive-by check: hold the trigger for a short burst while the
+            # car drives away from the marina and confirm the mechanic runs
+            # without errors. Only a burst — holding it for a whole leg
+            # maxes the wanted level and the police ram the car into a
+            # wedge, and stepping out on foot at 5 stars is a bust.
             page.mouse.move(W // 2, H // 2)
             page.mouse.down()
-            d.move_to(104, 156, radius=8, timeout=180, label="drive-by leg")
+            d.ap_set(104, 156, 8)
+            time.sleep(8)
             page.mouse.up()
+            d.move_to(104, 156, radius=8, timeout=180, label="drive-by leg")
             d.note(f"drive-by fired while driving: stars={d.state()['stars']}, heat={d.state()['heat']:.0f}")
             d.drive_route(-130, -104, radius=5, label="chop shop")
             s = d.state()
