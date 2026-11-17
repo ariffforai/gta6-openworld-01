@@ -136,12 +136,12 @@ AUTOPILOT_JS = """() => {
       // If the car has drifted off the road grid into a block, head for
       // the nearest road first — aiming at a far waypoint from inside a
       // block just pushes it deeper into the buildings. Roads run on
-      // multiples of 52 and are 12 wide, so more than 8 from every
-      // centreline means off-road.
+      // multiples of 52 and are 12 wide, so more than 6.5 from every
+      // centreline means off-road (on the sidewalk or worse).
       let steerTo = desired;
       const rx = Math.round(pl.x / 52) * 52, rz = Math.round(pl.z / 52) * 52;
       const offX = Math.abs(pl.x - rx), offZ = Math.abs(pl.z - rz);
-      if (offX > 8 && offZ > 8) {
+      if (offX > 6.5 && offZ > 6.5) {
         steerTo = offX < offZ
           ? Math.atan2(rx - pl.x, 0)
           : Math.atan2(0, rz - pl.z);
