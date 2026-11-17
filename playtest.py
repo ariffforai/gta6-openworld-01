@@ -303,7 +303,7 @@ class Driver:
                     raise RuntimeError(f"timeout driving to {label or (tx, tz)} "
                                        f"(still {d:.0f}m away, health {s['health']:.0f})")
                 if not bailed and s["inCar"] and time.time() - t0 > bailout:
-                    if s["stars"] >= 3:
+                    if s["stars"] >= 4:
                         # Stepping out on foot with the police this hot is a
                         # bust: a cruiser within 9 units ends the game.
                         # Stay in the car and keep working the reverse
@@ -460,15 +460,15 @@ def main():
             assert s["inCar"] and s["stage"] == 1, "coupe steal did not advance the mission"
             # Drive-by: fire a short burst from the moving coupe as it
             # leaves the marina. Every shot adds 4 heat, so a long burst
-            # maxes wanted and the police ram the car into a wedge — one
-            # second proves the mechanic. Drive forward in the car's own
+            # maxes wanted and the police ram the car into a wedge — half
+            # a second proves the mechanic. Drive forward in the car's own
             # heading, then hand off to the chop-shop route.
             s = d.state()
             hx, hz = math.sin(s["heading"]), math.cos(s["heading"])
             page.mouse.move(W // 2, H // 2)
             page.mouse.down()
             d.ap_set(s["x"] + hx * 60, s["z"] + hz * 60, 10)
-            time.sleep(1)
+            time.sleep(0.5)
             page.mouse.up()
             d.ap_stop()
             d.note(f"drive-by fired while driving: stars={d.state()['stars']}, heat={d.state()['heat']:.0f}")
