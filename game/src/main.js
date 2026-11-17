@@ -439,7 +439,17 @@ function step(dt) {
   if (player.health < 100) player.health = Math.min(100, player.health + dt * 1.2);
   if (player.health <= 0) { endGame('wasted'); return; }
 
-  // HUD.
+  // Autosave every 20 s while playing.
+  saveT += dt;
+  if (saveT > 20) { saveT = 0; saveGame(); }
+}
+
+// Presentation: HUD, audio and camera, once per rendered frame — not once
+// per fixed simulation step. The step loop can run 60+ steps a frame on a
+// slow renderer, and redrawing the minimap and rewriting the HUD that many
+// times is pure waste (a human only ever sees one frame). Keeping it here
+// also keeps the frame rate up, which is what the autopilot steers on.
+function updatePresentation(dt) {
   hud.setMoney(player.money, city.districtAt(player.x, player.z));
   hud.setHealth(player.health, player.armor);
   hud.setWanted(wanted.stars);
@@ -456,10 +466,6 @@ function step(dt) {
   });
   audio.setEngine(player.inCar ? clamp(Math.abs(player.speed) / 30, 0, 1) : 0, player.inCar);
   audio.setSiren(wanted.stars > 0, dt);
-
-  // Autosave every 20 s while playing.
-  saveT += dt;
-  if (saveT > 20) { saveT = 0; saveGame(); }
 
   // Camera. Never let it sit inside a building: lift it above the roof.
   if (shotName === 'city') {
@@ -541,6 +547,7 @@ function frame(t) {
     while (acc >= STEP && guard < MAX_STEPS) { step(STEP); acc -= STEP; guard++; }
     if (guard >= MAX_STEPS) acc = 0;
   }
+  if (state === 'playing') updatePresentation(dt);
   if (state === 'menu') {
     // Slow cinematic orbit behind the menu.
     const a = elapsed * 0.05;

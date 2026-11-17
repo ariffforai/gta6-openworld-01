@@ -286,9 +286,10 @@ class Driver:
                 self.note(f"  facing away from route, driving forward to intersection {pts[0]} first")
         for i, (wx, wz) in enumerate(pts):
             # Intermediate waypoints use a wide radius so the car starts
-            # its (wide) turn at the intersection early, instead of
-            # overshooting into the building on the far side.
-            r = radius if i == len(pts) - 1 else 15
+            # its (wide) turn at the intersection early — the turning
+            # circle is ~18 units, so it must be turning well before the
+            # corner or it overshoots into the building on the far side.
+            r = radius if i == len(pts) - 1 else 25
             s = self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}", stop_when=stop_when)
             if stop_when and stop_when(s):
                 return s
