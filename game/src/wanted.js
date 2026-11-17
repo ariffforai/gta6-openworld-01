@@ -1,6 +1,11 @@
 // The wanted system for SOLMAR: five stars, heat that rises with crimes and
 // cools when the player stays out of sight, police spawn counts per star, and
 // the "busted" rule when a police car pins the player on foot.
+//
+// Busted means pinned: a cruiser right on top of Jules (within 9 units) while
+// he is on foot, for a couple of seconds. Merely being chased — a cruiser
+// somewhere within sight — never busts him, or no job that ends on foot
+// (the pier shootout) could ever be finished.
 import { clamp } from './util.js';
 
 export const WANTED_LABELS = [
@@ -34,18 +39,19 @@ export class Wanted {
     if (this.heat < 88) return 4;
     return 5;
   }
-  // dt seconds pass; seenByPolice is whether any police car is near the player.
-  update(dt, seenByPolice, onFoot) {
+  // dt seconds pass; seenByPolice is whether any police car is near the player,
+  // pinned is whether one is right on top of him on foot (the bust rule).
+  update(dt, seenByPolice, onFoot, pinned) {
     if (this.stars > 0) {
       if (seenByPolice) {
         this.hiddenT = 0;
-        this.bustT = onFoot ? this.bustT + dt : 0;
       } else {
         this.hiddenT += dt;
-        this.bustT = 0;
         // Lay low: heat bleeds off after 6 seconds unseen, faster on foot.
         if (this.hiddenT > 6) this.heat = Math.max(0, this.heat - dt * (onFoot ? 4.5 : 2.2));
       }
+      const isPinned = pinned === undefined ? (seenByPolice && onFoot) : pinned;
+      this.bustT = isPinned ? this.bustT + dt : 0;
       const want = this.starsForHeat();
       if (want < this.stars && this.hiddenT > 4) this.stars = want;
       if (this.stars === 0) this.bustT = 0;

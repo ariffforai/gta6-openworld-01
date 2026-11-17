@@ -1,6 +1,7 @@
 // The player for SOLMAR: Jules Marek, on foot and behind the wheel. On foot
 // he walks, sprints and jumps with a third-person camera; near a car, E steals
-// it and he drives with arcade physics until E steps out again.
+// it and he drives with arcade physics until E steps out again. Holding the
+// mouse while driving lets him look around and shoot from the car — a drive-by.
 import * as THREE from 'three';
 import { clamp, angleLerp, damp, collideCircleBox } from './util.js';
 import { CITY_R } from './city.js';
@@ -150,14 +151,21 @@ export class Player {
     const steer = input.axis('KeyA', 'KeyD');
     const handbrake = input.down('Space');
     const crashed = this.car.drive(throttle, steer, handbrake, dt, colliders);
-    if (crashed && Math.abs(this.car.speed) > 6) this.damage(4, 0);
+    if (crashed && Math.abs(this.car.speed) > 6) {
+      this.damage(4, 0);
+      // Hard hits batter the car too: it starts smoking, then wrecks.
+      this.car.health = Math.max(0, this.car.health - 8);
+    }
     this.car.syncMesh(dt);
     this.x = this.car.x; this.z = this.car.z;
     this.heading = this.car.heading;
-    // Chase camera follows the car's heading when driving forward.
-    if (this.car.speed > 2) {
+    // Chase camera follows the car's heading when driving forward — unless
+    // the player is holding the mouse to look around and shoot from the car,
+    // in which case the camera stays where he aims it (drive-by).
+    if (this.car.speed > 2 && !input.mouseDown) {
       this.camYaw = angleLerp(this.camYaw, this.car.heading, 1 - Math.exp(-2.2 * dt));
     }
+    this.armed = input.mouseDown;
     this.speed = Math.abs(this.car.speed);
   }
   syncMesh(dt) {

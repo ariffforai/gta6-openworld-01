@@ -245,6 +245,19 @@ export class City {
       new THREE.MeshLambertMaterial({ color: 0xc23b2e }));
     lightTop.position.set(190, 23, CITY_R + 30); scene.add(lightTop);
     this.addCollider(190, CITY_R + 30, 7, 7, 24);
+    // A yacht anchored off the pier — the getaway boat in the final job.
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(6, 1.6, 15),
+      new THREE.MeshLambertMaterial({ color: 0xf2ead8 }));
+    hull.position.set(176, 0.8, CITY_R + 96); hull.castShadow = true;
+    scene.add(hull);
+    const yachtCabin = new THREE.Mesh(new THREE.BoxGeometry(4, 1.8, 7),
+      new THREE.MeshLambertMaterial({ color: 0x2e6fc2 }));
+    yachtCabin.position.set(176, 2.4, CITY_R + 94);
+    scene.add(yachtCabin);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 9, 6),
+      new THREE.MeshLambertMaterial({ color: 0x8a6a45 }));
+    mast.position.set(176, 6.5, CITY_R + 96);
+    scene.add(mast);
     // Beach umbrellas.
     for (let i = 0; i < 8; i++) {
       const ux = -180 + i * 52 + rng() * 20;

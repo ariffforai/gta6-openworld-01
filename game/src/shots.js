@@ -57,9 +57,11 @@ export function stageShot(name, ctx) {
   }
 
   if (shot === 'mission') {
-    // On foot at the pier, pistol out, the Vultures waiting.
+    // On foot at the pier, pistol out, the Vultures waiting. Hold F (not the
+    // trigger) so the pistol stays drawn and the crosshair shows, but nobody
+    // gets shot before the screenshot is taken.
     player.spawn(156, 250, 0);
-    input.mouseDown = true; // hold the trigger so the pistol stays out
+    input.keys['KeyF'] = true;
     missions.start(2);
     missions.stage = 1;
     missions.showStage();

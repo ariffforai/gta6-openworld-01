@@ -7,7 +7,8 @@ import { Traffic, Police, CAR_COLORS } from './vehicles.js';
 import { Pedestrians } from './pedestrians.js';
 import { Player } from './player.js';
 import { Combat } from './combat.js';
-import { Missions, MISSION_DEFS } from './missions.js';
+import { Missions, MISSION_DEFS, COUPE_SPOT } from './missions.js';
+import { Stashes, STASH_VALUE } from './stashes.js';
 import { Wanted } from './wanted.js';
 import { HUD } from './hud.js';
 import { SoundBank } from './audio.js';
@@ -56,6 +57,7 @@ const peds = new Pedestrians(scene, city, mulberry32(SEED + 37));
 const player = new Player(scene);
 const combat = new Combat(scene);
 const missions = new Missions(scene);
+const stashes = new Stashes(scene);
 const wanted = new Wanted();
 const hud = new HUD();
 const audio = new SoundBank();
@@ -65,11 +67,13 @@ traffic.spawnTraffic(14);
 traffic.spawnParked(9);
 peds.spawn(26);
 
-// The mission-1 target: a red Coral coupe parked by the marina.
+// The mission-2 target: a red Coral coupe parked by the marina, on the open
+// road at the kerb (COUPE_SPOT) — never inside a block, so Jules can always
+// walk up to it and steal it.
 const coupe = traffic.parked.find((c) => c.colorName === 'Sunset Red') || traffic.parked[0];
 if (coupe) {
-  coupe.mesh.position.set(130, 0, 130);
-  coupe.x = 130; coupe.z = 130; coupe.heading = Math.PI / 2;
+  coupe.mesh.position.set(COUPE_SPOT.x, 0, COUPE_SPOT.z);
+  coupe.x = COUPE_SPOT.x; coupe.z = COUPE_SPOT.z; coupe.heading = COUPE_SPOT.heading;
   coupe.mesh.rotation.y = coupe.heading;
   coupe.isTarget = true;
   coupe.colorName = 'Coral coupe';
@@ -80,6 +84,7 @@ let now = 0;
 let elapsed = 0;              // wall time since start, for the shot timer
 let shotFrames = 0;
 let policeSpawnT = 0;
+let smokeT = 0;
 let saveT = 0;
 let camPos = new THREE.Vector3(0, 8, -14);
 let camLook = new THREE.Vector3(0, 1.5, 0);
@@ -120,7 +125,7 @@ function startGame(fresh) {
   if (fresh) {
     clearSave();
     player.money = 0; player.health = 100; player.armor = 0;
-    missions.loadState({ index: 0, done: [false, false, false] });
+    missions.loadState({ index: 0, done: [false, false, false, false] });
     player.spawn(0, 40, 0);
   } else {
     const s = loadSave();
@@ -185,6 +190,7 @@ function tryEnterCar() {
   if (player.inCar) { player.exitCar(); hud.toast('On foot.', 1.5); return; }
   const car = nearestCar(4.5);
   if (!car) return;
+  if (!car.alive) { hud.toast('That car is wrecked.', 2); return; }
   if (car.isPolice) { hud.toast('That is a police cruiser — stealing it is a bad idea.', 3); return; }
   const wasParked = traffic.parked.includes(car);
   if (wasParked) traffic.removeParked(car);
@@ -215,6 +221,12 @@ function advanceMission() {
 
 function handleMissionEvent(ev) {
   if (!ev) return;
+  if (ev.type === 'missionFailed') {
+    audio.wasted();
+    hud.big('TOO SLOW', 'The courier missed the yacht. Press T to try again.', 3);
+    hud.toast('The job failed — the story waits. Press T to try again.', 5);
+    return;
+  }
   if (ev.type === 'stageComplete') {
     audio.pickup();
     const s = ev.stage;
@@ -251,11 +263,14 @@ function takeJob() {
 }
 
 function shoot() {
-  if (player.inCar) return;
   if (combat.fireCooldown > 0) return;
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
-  const origin = camera.position.clone();
+  // On foot the shot leaves the camera; from a car it leaves the driver's
+  // seat, so a drive-by fires where the player is looking, not behind him.
+  const origin = player.inCar
+    ? new THREE.Vector3(player.x, 1.4, player.z)
+    : camera.position.clone();
   const targets = [];
   // Pass the live objects (not copies) so hits decrement real health.
   for (const e of combat.enemies) targets.push(Object.assign(e, { kind: 'enemy', y: 1.3, radius: 1.15 }));
@@ -305,11 +320,14 @@ function updatePolice(dt) {
       policeSpawnT = 1.4;
       police.spawnNear(player.x, player.z, player.heading);
     }
-    let seen = false;
+    let seen = false, pinned = false;
     for (const c of police.cars) {
-      if (dist2(c.x, c.z, player.x, player.z) < 60 * 60) seen = true;
+      const d2 = dist2(c.x, c.z, player.x, player.z);
+      if (d2 < 60 * 60) seen = true;
+      // Pinned means a cruiser is right on top of Jules on foot.
+      if (d2 < 9 * 9 && !player.inCar) pinned = true;
     }
-    wanted.update(dt, seen, !player.inCar);
+    wanted.update(dt, seen, !player.inCar, pinned);
     if (wanted.busted) endGame('busted');
   }
   police.removeFar(player.x, player.z, 260);
@@ -334,8 +352,8 @@ function step(dt) {
   player.update(dt, input, city.colliders);
   if (state !== 'playing') return; // endGame may have fired inside player.update
 
-  // Shooting: hold the mouse on foot.
-  if (!player.inCar && input.mouseDown) shoot();
+  // Shooting: hold the mouse on foot, or from the car for a drive-by.
+  if (input.mouseDown) shoot();
   else combat.fireCooldown = Math.max(0, combat.fireCooldown - dt);
 
   // Car vs car: the player's car shoves traffic.
@@ -385,6 +403,32 @@ function step(dt) {
   const ev = missions.update(player.x, player.z, combat.aliveCount(), now);
   handleMissionEvent(ev);
 
+  // Cash stashes: walk or drive over one to pocket it.
+  const found = stashes.update(player.x, player.z, now);
+  if (found) {
+    player.money += STASH_VALUE;
+    audio.pickup();
+    hud.toast(`Found a stash at ${found.note}! +$${STASH_VALUE}  (${stashes.remaining} left)`, 4);
+  }
+
+  // A battered car smokes; a wrecked one blows up and throws Jules out.
+  smokeT -= dt;
+  if (player.inCar && player.car) {
+    const car = player.car;
+    if (car.health <= 0) {
+      car.alive = false;
+      combat.burst(car.x, 1, car.z, 0xff8040);
+      combat.smoke(car.x, 1, car.z, true);
+      audio.crash();
+      hud.toast('Your car is wrecked!', 3);
+      player.damage(20, now);
+      player.exitCar();
+    } else if (car.health < 50 && smokeT <= 0) {
+      smokeT = 0.35;
+      combat.smoke(car.x, 1.2, car.z, false);
+    }
+  }
+
   // Health regen (slow) and death.
   if (player.health < 100) player.health = Math.min(100, player.health + dt * 1.2);
   if (player.health <= 0) { endGame('wasted'); return; }
@@ -395,14 +439,14 @@ function step(dt) {
   hud.setWanted(wanted.stars);
   hud.setObjective(missions.objectiveText(player.x, player.z));
   hud.setSpeed(Math.abs(player.speed) * 2.24, player.inCar);
-  hud.setArmed(!player.inCar);
+  hud.setArmed(player.armed);
   const near = player.inCar ? null : nearestCar(4.5);
   hud.setInteract(near ? `Press E — steal the ${near.isTarget ? 'red Coral coupe' : near.colorName || 'car'}` : '');
   hud.tick(dt);
   hud.drawMinimap({
     player, peds: peds.peds.filter((p) => p.alive),
     traffic: [...traffic.cars, ...traffic.parked], police: police.cars,
-    marker: missions.marker, now,
+    marker: missions.marker, stashes: stashes.markers(), now,
   });
   audio.setEngine(player.inCar ? clamp(Math.abs(player.speed) / 30, 0, 1) : 0, player.inCar);
   audio.setSiren(wanted.stars > 0, dt);
@@ -466,6 +510,16 @@ if (saved) {
   btnContinue.classList.remove('hidden');
   saveInfo.textContent = saveLabel(saved);
 }
+
+// Test and automation handle: lets a scripted playtest observe the game
+// (position, mission state, enemies alive) and aim the camera the way a
+// mouse would. It changes nothing about how the game plays.
+window.__solmar = {
+  player, missions, wanted, police, traffic, peds, combat, city, hud, input,
+  stashes, camera,
+  get state() { return state; },
+  get now() { return now; },
+};
 
 // The loop: fixed 1/60 s steps, paint every frame.
 let last = performance.now();

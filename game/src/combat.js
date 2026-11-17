@@ -99,6 +99,21 @@ export class Combat {
       });
     }
   }
+  // Grey smoke that rises and spreads: a damaged car leaking it, or a wreck.
+  smoke(x, y, z, big) {
+    const n = big ? 5 : 2;
+    for (let i = 0; i < n; i++) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3),
+        new THREE.MeshBasicMaterial({ color: 0x555560, transparent: true, opacity: 0.75 }));
+      m.position.set(x + (Math.random() - 0.5) * 0.8, y, z + (Math.random() - 0.5) * 0.8);
+      this.scene.add(m);
+      this.particles.push({
+        mesh: m,
+        vx: (Math.random() - 0.5) * 1.5, vy: 2 + Math.random() * 2, vz: (Math.random() - 0.5) * 1.5,
+        t: big ? 1.4 : 0.9,
+      });
+    }
+  }
   // Enemy AI: face the player, shoot with poor aim on a timer.
   update(dt, playerPos, onEnemyShot) {
     this.fireCooldown = Math.max(0, this.fireCooldown - dt);

@@ -21,7 +21,9 @@ export function clearSave() {
 }
 export function saveLabel(s) {
   if (!s) return '';
-  const done = (s.missions && s.missions.done ? s.missions.done.filter(Boolean).length : 0);
+  const doneArr = s.missions && s.missions.done ? s.missions.done : [];
+  const done = doneArr.filter(Boolean).length;
+  const total = doneArr.length || 4;
   const when = s.savedAt ? new Date(s.savedAt).toLocaleString() : '';
-  return `Saved game: $${(s.money || 0).toLocaleString('en-US')} · ${done}/3 jobs done` + (when ? ` · ${when}` : '');
+  return `Saved game: $${(s.money || 0).toLocaleString('en-US')} · ${done}/${total} jobs done` + (when ? ` · ${when}` : '');
 }

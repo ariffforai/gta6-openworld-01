@@ -1,6 +1,7 @@
 // Vehicles for SOLMAR: build a car from boxes (body, cabin, wheels, lights),
 // arcade driving physics, traffic that follows the road grid, and police cars
-// that chase and ram the player.
+// that chase and ram the player. A police cruiser's roof bar flashes red and
+// blue while it is on duty, so the law is visible long before it is close.
 import * as THREE from 'three';
 import { clamp, lerp, angleDiff, mulberry32, dist2 } from './util.js';
 import { BLOCK, GRID, CITY_R } from './city.js';
@@ -39,12 +40,15 @@ export function makeCarMesh(colorHex, isPolice) {
     const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.02, 0.2, 4.42),
       new THREE.MeshLambertMaterial({ color: 0xffffff }));
     stripe.position.y = 0.72; g.add(stripe);
+    // The roof bar flashes: the blue half and the red half take turns.
+    // Kept on the mesh so Police.update can flip them every few frames.
     const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.16, 0.4),
       new THREE.MeshBasicMaterial({ color: 0x2266ff }));
     bar.position.set(0, 1.5, -0.25); g.add(bar);
     const bar2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.42),
       new THREE.MeshBasicMaterial({ color: 0xff2020 }));
     bar2.position.set(0.62, 1.5, -0.25); g.add(bar2);
+    g.userData.lightbar = { blue: bar, red: bar2 };
     const decal = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 1.6),
       new THREE.MeshBasicMaterial({ color: 0xffffff }));
     decal.position.set(-1.02, 0.62, 0); g.add(decal);
@@ -73,7 +77,7 @@ export class Car {
     this.x = x; this.z = z; this.heading = heading;
     this.speed = 0;               // units per second, forward
     this.steer = 0;               // current steering angle
-    this.maxSpeed = isPolice ? 34 : 28;
+    this.maxSpeed = isPolice ? 30 : 28;
     this.accel = isPolice ? 16 : 13;
     this.alive = true;
     this.health = 100;
@@ -272,7 +276,16 @@ export class Police {
       }
       car.syncMesh(dt);
     }
+    // Flash the roof bars: blue half bright, then red half bright, ~4 times a
+    // second, so a cruiser reads as police from across the street.
     this.flashT += dt;
+    const blueOn = Math.floor(this.flashT * 4) % 2 === 0;
+    for (const car of this.cars) {
+      const bar = car.mesh.userData.lightbar;
+      if (!bar) continue;
+      bar.blue.material.color.setHex(blueOn ? 0x4488ff : 0x14244a);
+      bar.red.material.color.setHex(blueOn ? 0x4a1414 : 0xff3030);
+    }
   }
   clear() {
     for (const car of this.cars) this.scene.remove(car.mesh);

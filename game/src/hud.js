@@ -123,6 +123,16 @@ export class HUD {
       ctx.beginPath(); ctx.arc(mx, my, pulse, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
     }
+    // Cash stashes still out there, as small gold diamonds.
+    if (state.stashes) {
+      for (const s of state.stashes) {
+        const [mx, my] = toMap(s.x, s.z);
+        ctx.fillStyle = '#ffd23e';
+        ctx.beginPath();
+        ctx.moveTo(mx, my - 3); ctx.lineTo(mx + 3, my); ctx.lineTo(mx, my + 3); ctx.lineTo(mx - 3, my);
+        ctx.closePath(); ctx.fill();
+      }
+    }
     // Player arrow, rotated to heading.
     const [px, py] = toMap(state.player.x, state.player.z);
     ctx.save();
