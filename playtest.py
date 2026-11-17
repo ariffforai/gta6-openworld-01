@@ -364,7 +364,10 @@ def main():
             time.sleep(2)
             page.screenshot(path=os.path.join(TMP, "playtest-menu.png"))
             d.note(f"menu visible: {page.is_visible('#menu')}")
-            page.click("#btn-start")
+            # Click the start button via JS: at a small viewport the menu
+            # is taller than the window and Playwright's actionability
+            # check waits forever for the button to scroll into view.
+            page.evaluate("() => document.getElementById('btn-start').click()")
             s = d.wait_state()
             d.install_autopilot()
             d.note(f"playing. objective: {s['objective']}")
