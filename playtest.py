@@ -272,8 +272,8 @@ class Driver:
         if s["inCar"] and pts:
             # Facing away from the route: do not U-turn mid-block (the
             # car's turning circle is wider than the road). Drive forward
-            // along the road the car is on to the next intersection, turn
-            // there, and pick the route up from the far side.
+            # along the road the car is on to the next intersection, turn
+            # there, and pick the route up from the far side.
             desired0 = math.atan2(pts[0][0] - s["x"], pts[0][1] - s["z"])
             if abs(ang_diff(s["heading"], desired0)) > 2.0:
                 h = s["heading"]
