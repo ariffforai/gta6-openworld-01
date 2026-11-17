@@ -9,7 +9,9 @@ The driver steers through the real input path (WASD keys, E to enter cars,
 mouse held to shoot) and only reads game state through the window.__solmar
 handle to decide what to do next, the way a player reads the HUD. It runs
 its own server on port 8080 and reports mission completions, money, health,
-and any console/page errors. Screenshots land in shots-tmp/.
+and any console/page errors. Screenshots land in shots-tmp/. The game loads
+with ?fast=1 so the simulation keeps up with real time on this VM's slow
+software renderer (see main.js); the shipped game plays the same without it.
 
 Usage: python3 playtest.py [--port 8080] [--viewport 960x540]
 """
@@ -95,14 +97,15 @@ class Driver:
             time.sleep(0.5)
         raise RuntimeError("game never reached playing state")
 
-    def move_to(self, tx, tz, radius=5, timeout=420, label=""):
-        """Walk or drive to (tx,tz). Works on foot (camYaw steering) and in a
-        car (A/D steering); reverses out if it gets stuck against a wall."""
+    def move_to(self, tx, tz, radius=5, timeout=900, label=""):
+        """Walk or drive to one point. Steers on foot (camYaw) or in a car
+        (A/D); if wedged against a wall it backs up (car) or sidesteps (foot)."""
         t0 = time.time()
         last_progress = time.time()
         last_x = last_z = None
         reversing_until = 0
-        leg_start = time.time()
+        sidestep_until = 0
+        sidestep_dir = 1
         while True:
             s = self.state()
             if s is None:
@@ -135,23 +138,37 @@ class Driver:
                         last_progress = now
                         self.note(f"  stuck near ({s['x']:.0f},{s['z']:.0f}), reversing")
             else:
-                self.set_cam(desired)
-                self.key("KeyW", True)
-                self.key("ShiftLeft", d > 12)
-                self.key("KeyA", False); self.key("KeyD", False)
-            time.sleep(0.35)
-            if time.time() - leg_start > 240 and label == "":
-                pass
+                if now < sidestep_until:
+                    # Sidestep around the wall, then re-aim.
+                    self.key("KeyW", True)
+                    self.key("KeyA", sidestep_dir < 0); self.key("KeyD", sidestep_dir > 0)
+                else:
+                    self.set_cam(desired)
+                    self.key("KeyW", True)
+                    self.key("ShiftLeft", d > 12)
+                    self.key("KeyA", False); self.key("KeyD", False)
+                    if now - last_progress > 6:
+                        sidestep_until = now + 1.5
+                        sidestep_dir = -sidestep_dir
+                        last_progress = now
+                        self.note(f"  stuck on foot near ({s['x']:.0f},{s['z']:.0f}), sidestepping")
+            time.sleep(0.3)
 
-    def drive_route(self, tx, tz, radius=5, timeout=600, label=""):
+    def go_to(self, tx, tz, radius=5, timeout=900, label=""):
+        """Follow the road grid to (tx,tz): waypoints at intersections, then
+        the final approach. Works on foot and in a car."""
         s = self.state()
-        pts = road_route(s["x"], s["z"], tx, tz)
+        dist0 = math.hypot(tx - s["x"], tz - s["z"])
+        pts = road_route(s["x"], s["z"], tx, tz) if dist0 > 30 else [(tx, tz)]
         for i, (wx, wz) in enumerate(pts):
             r = radius if i == len(pts) - 1 else 7
             self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}")
         return self.state()
 
-    def steal_nearest_car(self, timeout=300):
+    def drive_route(self, tx, tz, radius=5, timeout=900, label=""):
+        return self.go_to(tx, tz, radius=radius, timeout=timeout, label=label)
+
+    def steal_nearest_car(self, timeout=600):
         """Walk to the nearest parked car and press E."""
         t0 = time.time()
         while time.time() - t0 < timeout:
@@ -167,7 +184,7 @@ class Driver:
                     return s
             else:
                 near = min(s["parked"], key=lambda c: (c["x"] - s["x"]) ** 2 + (c["z"] - s["z"]) ** 2)
-                self.move_to(near["x"], near["z"], radius=3.5, timeout=120, label="parked car")
+                self.go_to(near["x"], near["z"], radius=3.5, timeout=300, label="parked car")
         raise RuntimeError("could not steal a car")
 
     def shootout(self, timeout=600):
@@ -213,13 +230,21 @@ def main():
             page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
             page.on("requestfailed", lambda r: errors.append(f"requestfailed: {r.url}"))
             d = Driver(page)
-            page.goto(BASE + "/", wait_until="load")
+            # ?fast=1 lets the game simulate at real-time speed on this slow
+            # software renderer (see main.js); without it the fixed-step loop
+            # caps at 5 steps a frame and the game crawls.
+            page.goto(BASE + "/?fast=1", wait_until="load")
             time.sleep(2)
             page.screenshot(path=os.path.join(TMP, "playtest-menu.png"))
             d.note(f"menu visible: {page.is_visible('#menu')}")
             page.click("#btn-start")
             s = d.wait_state()
             d.note(f"playing. objective: {s['objective']}")
+            # How fast is the game clock running here?
+            n0 = page.evaluate("() => window.__solmar.now")
+            time.sleep(10)
+            n1 = page.evaluate("() => window.__solmar.now")
+            d.note(f"game speed: {(n1 - n0) / 10:.2f} game-s per real-s")
 
             # --- Mission 1: The Pickup ---
             page.keyboard.press("KeyT")
@@ -247,7 +272,7 @@ def main():
             if s["inCar"]:
                 page.keyboard.press("KeyE")  # step out
                 time.sleep(0.8)
-            d.move_to(120, 160.6, radius=3.5, timeout=180, label="coupe on foot")
+            d.go_to(120, 160.6, radius=3.5, timeout=300, label="coupe on foot")
             s = d.state()
             d.note(f"at the coupe on foot: interact='{s['interact']}'")
             page.keyboard.press("KeyE")

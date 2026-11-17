@@ -22,7 +22,13 @@ const shotName = params.get('shot');
 const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
 const SEED = Number.isInteger(seedParam) ? seedParam : 20261118;
 const STEP = 1 / 60;
-const MAX_FRAME = 0.25;
+// ?fast=1 is a test hook for scripted playtests on slow software renderers:
+// the fixed-step loop may then simulate up to real time per rendered frame
+// (more 1/60 s steps per frame), so the game still plays at full speed when
+// a frame takes a second to draw. Normal play is unchanged (fast off).
+const FAST = params.get('fast') === '1';
+const MAX_FRAME = FAST ? 2 : 0.25;
+const MAX_STEPS = FAST ? 120 : 5;
 
 const canvas = document.getElementById('scene');
 const status = document.getElementById('status');
@@ -516,7 +522,7 @@ if (saved) {
 // mouse would. It changes nothing about how the game plays.
 window.__solmar = {
   player, missions, wanted, police, traffic, peds, combat, city, hud, input,
-  stashes, camera,
+  stashes, camera, renderer, scene,
   get state() { return state; },
   get now() { return now; },
 };
@@ -532,8 +538,8 @@ function frame(t) {
   if (state === 'playing' || state === 'menu') {
     acc += dt;
     let guard = 0;
-    while (acc >= STEP && guard < 5) { step(STEP); acc -= STEP; guard++; }
-    if (guard >= 5) acc = 0;
+    while (acc >= STEP && guard < MAX_STEPS) { step(STEP); acc -= STEP; guard++; }
+    if (guard >= MAX_STEPS) acc = 0;
   }
   if (state === 'menu') {
     // Slow cinematic orbit behind the menu.
