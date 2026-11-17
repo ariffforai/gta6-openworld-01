@@ -172,7 +172,7 @@ AUTOPILOT_JS = """() => {
         // turn bites. And crawl on the final approach: the arrival check
         // runs once per frame, so at full speed the car can pass straight
         // through the small delivery circle between ticks.
-        const cruise = d < 20 ? 4 : 10;
+        const cruise = d < 20 ? 3.5 : 7;
         K['KeyW'] = Math.abs(car.speed) < cruise && Math.abs(diff) < 0.9;
         K['KeyA'] = diff < -0.15; K['KeyD'] = diff > 0.15;
         if (now - ap.lastProgress > 3 && Math.abs(car.speed) < 2) {
@@ -334,7 +334,7 @@ class Driver:
             # its (wide) turn at the intersection early — the turning
             # circle is ~13 units, so it must be turning well before the
             # corner or it overshoots into the building on the far side.
-            r = radius if i == len(pts) - 1 else 25
+            r = radius if i == len(pts) - 1 else 30
             s = self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}", stop_when=stop_when, bailout=bailout)
             if stop_when and stop_when(s):
                 return s
