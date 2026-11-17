@@ -170,8 +170,12 @@ export class Traffic {
   spawnParked(n) {
     for (let i = 0; i < n; i++) {
       const s = this.randomRoadSpot();
-      // Parked cars sit at the road edge, parallel to the street.
-      const side = this.rng() < 0.5 ? -4.6 : 4.6;
+      // Parked cars sit at the road edge, parallel to the street — but they
+      // must stay ON the road (half-width 6): the lane is already ±2.6 from
+      // the centreline, so the extra kerb offset is only ±2.2. A bigger
+      // offset parks the car on the sidewalk inside a block, where a
+      // building can spawn on top of it and nobody can ever reach it.
+      const side = this.rng() < 0.5 ? -2.2 : 2.2;
       const vertical = Math.abs(Math.sin(s.heading)) < 0.5;
       const x = vertical ? s.x + (this.rng() < 0.5 ? side : -side) : s.x;
       const z = vertical ? s.z : s.z + (this.rng() < 0.5 ? side : -side);
