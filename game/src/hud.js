@@ -55,7 +55,10 @@ export class HUD {
   setHint(text) { this.el.hint.textContent = text || ''; }
   setInteract(text) {
     this.el.interact.classList.toggle('hidden', !text);
-    if (text) this.el.interact.textContent = text;
+    // Clear the text as well as hiding it: the prompt's textContent is
+    // read by automation (and by screen readers), and a stale string
+    // left behind would claim a car is still in reach after it drove off.
+    this.el.interact.textContent = text || '';
   }
   toast(text, seconds) {
     this.el.toast.textContent = text;

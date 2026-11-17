@@ -47,7 +47,10 @@ STATE_JS = """() => {
     police: s.police.cars.map(c => ({x: c.x, z: c.z})),
     parked: s.traffic.parked.map(c => ({x: c.x, z: c.z, target: !!c.isTarget})),
     objective: document.getElementById('objective').textContent,
-    interact: document.getElementById('interact').textContent,
+    // The interact prompt is hidden with a CSS class when no car is in
+    // reach, so only trust its text while it is actually shown.
+    interact: (() => { const el = document.getElementById('interact');
+      return el && !el.classList.contains('hidden') ? el.textContent : ''; })(),
   };
 }"""
 
