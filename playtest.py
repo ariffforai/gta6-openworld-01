@@ -5,13 +5,24 @@ Wheels (steal the red Coral coupe at the marina + deliver it), The Exchange
 Getaway (a 90-second timed delivery to the marina yacht). It also checks the
 drive-by (firing from a moving car) and the cash stashes on the routes.
 
-The driver steers through the real input path (WASD keys, E to enter cars,
-mouse held to shoot) and only reads game state through the window.__solmar
-handle to decide what to do next, the way a player reads the HUD. It runs
-its own server on port 8080 and reports mission completions, money, health,
-and any console/page errors. Screenshots land in shots-tmp/. The game loads
-with ?fast=1 so the simulation keeps up with real time on this VM's slow
-software renderer (see main.js); the shipped game plays the same without it.
+How the driver works, honestly: the continuous steering runs as a small
+autopilot injected into the page (window.__ap). It writes the same
+input.keys the keyboard handler writes and aims the same camYaw the mouse
+sets — but it runs on the renderer's own thread between frames. That is the
+only way to steer here: on this VM a CDP round-trip takes ~1s, and a car at
+28 u/s covers 40 m between Python polls, so Python-side steering wedges the
+car against buildings (proven in run r2f). Python itself still does the real
+input: T and E are real keyboard presses, the drive-by holds the real mouse,
+and every decision (which mission, which target, when to shoot) is made in
+Python from state read through window.__solmar, the way a player reads the
+HUD. The game code under test — movement, collisions, car physics, combat,
+missions, payouts — is all the real thing.
+
+It runs its own server on port 8080 and reports mission completions, money,
+health, and any console/page errors. Screenshots land in shots-tmp/. The game
+loads with ?fast=1 so the simulation keeps up with real time on this VM's
+slow software renderer (see main.js); the shipped game plays the same
+without it.
 
 Usage: python3 playtest.py [--port 8080] [--viewport 960x540]
 """
@@ -51,7 +62,111 @@ STATE_JS = """() => {
     // reach, so only trust its text while it is actually shown.
     interact: (() => { const el = document.getElementById('interact');
       return el && !el.classList.contains('hidden') ? el.textContent : ''; })(),
+    apArrived: !!(window.__ap && window.__ap.arrived),
   };
+}"""
+
+# The autopilot: a 50 ms interval on the page's own thread. It steers the
+# player/car toward window.__ap's target and, in shoot mode, aims at the
+# nearest living enemy and holds the trigger. It writes input.keys and
+# camYaw — the same fields the keyboard/mouse handlers write — so the game
+# cannot tell it apart from a player holding the keys. Python only sets the
+# target and polls for arrival; it never steers directly.
+AUTOPILOT_JS = """() => {
+  const s = window.__solmar;
+  if (window.__ap) return; // already installed
+  window.__ap = {
+    x: 0, z: 0, radius: 5, active: false, arrived: false, shoot: false,
+    lastX: 0, lastZ: 0, lastProgress: 0, reverseUntil: 0,
+    sideUntil: 0, sideDir: 1,
+  };
+  window.__apSet = (x, z, radius) => {
+    const ap = window.__ap;
+    ap.x = x; ap.z = z; ap.radius = radius;
+    ap.active = true; ap.arrived = false; ap.shoot = false;
+    ap.lastX = s.player.x; ap.lastZ = s.player.z;
+    ap.lastProgress = performance.now() / 1000;
+    ap.reverseUntil = 0; ap.sideUntil = 0;
+  };
+  window.__apStop = () => {
+    const ap = window.__ap;
+    ap.active = false; ap.shoot = false; ap.arrived = false;
+    const k = s.input.keys;
+    k['KeyW'] = k['KeyA'] = k['KeyS'] = k['KeyD'] = k['ShiftLeft'] = false;
+  };
+  window.__apShoot = (on) => {
+    const ap = window.__ap;
+    ap.shoot = !!on;
+    if (!on) s.input.mouseDown = false;
+  };
+  window.__apTick = () => {
+    const ap = window.__ap, inp = s.input, pl = s.player;
+    const K = inp.keys;
+    const release = () => {
+      K['KeyW'] = K['KeyA'] = K['KeyS'] = K['KeyD'] = K['ShiftLeft'] = false;
+    };
+    if (s.state !== 'playing') { release(); inp.mouseDown = false; return; }
+    const now = performance.now() / 1000;
+    // Shoot mode: aim at the nearest living enemy, hold the trigger,
+    // walk closer if the shots fall short.
+    if (ap.shoot) {
+      const alive = s.combat.enemies.filter(e => e.alive);
+      if (alive.length === 0) { inp.mouseDown = false; release(); return; }
+      let best = null, bd = 1e9;
+      for (const e of alive) {
+        const d = (e.x - pl.x) ** 2 + (e.z - pl.z) ** 2;
+        if (d < bd) { bd = d; best = e; }
+      }
+      pl.camYaw = Math.atan2(best.x - pl.x, best.z - pl.z);
+      inp.mouseDown = true;
+      K['KeyW'] = Math.sqrt(bd) > 26 && !pl.inCar;
+      K['KeyA'] = K['KeyD'] = K['KeyS'] = false;
+      return;
+    }
+    if (!ap.active) { release(); return; }
+    const dx = ap.x - pl.x, dz = ap.z - pl.z;
+    const d = Math.hypot(dx, dz);
+    if (d <= ap.radius) { ap.active = false; ap.arrived = true; release(); return; }
+    if (Math.hypot(pl.x - ap.lastX, pl.z - ap.lastZ) > 1.5) {
+      ap.lastX = pl.x; ap.lastZ = pl.z; ap.lastProgress = now;
+    }
+    const desired = Math.atan2(dx, dz);
+    if (pl.inCar && pl.car) {
+      const car = pl.car;
+      let diff = desired - car.heading;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      if (now < ap.reverseUntil) {
+        K['KeyW'] = false; K['KeyS'] = true;
+        K['KeyA'] = diff > 0; K['KeyD'] = diff <= 0;
+      } else {
+        K['KeyS'] = false;
+        // Keep the car around 8-12 u/s: fast enough to steer (steering
+        // scales with speed), slow enough that one control tick — about
+        // one frame on this slow renderer — never carries it far off the
+        // 12-wide road.
+        K['KeyW'] = Math.abs(car.speed) < 12;
+        K['KeyA'] = diff < -0.1; K['KeyD'] = diff > 0.1;
+        if (now - ap.lastProgress > 3 && Math.abs(car.speed) < 2) {
+          ap.reverseUntil = now + 2; ap.lastProgress = now;
+        }
+      }
+    } else {
+      if (now < ap.sideUntil) {
+        K['KeyW'] = true;
+        K['KeyA'] = ap.sideDir < 0; K['KeyD'] = ap.sideDir > 0;
+      } else {
+        pl.camYaw = desired;
+        K['KeyW'] = true;
+        K['ShiftLeft'] = d > 12;
+        K['KeyA'] = K['KeyD'] = false;
+        if (now - ap.lastProgress > 4) {
+          ap.sideUntil = now + 1.2; ap.sideDir = -ap.sideDir; ap.lastProgress = now;
+        }
+      }
+    }
+  };
+  setInterval(window.__apTick, 50);
 }"""
 
 def ang_diff(a, b):
@@ -91,6 +206,12 @@ class Driver:
         self.held.clear()
     def set_cam(self, yaw):
         self.page.evaluate(f"() => {{ window.__solmar.player.camYaw = {yaw}; }}")
+    def install_autopilot(self):
+        self.page.evaluate(AUTOPILOT_JS)
+    def ap_set(self, x, z, radius):
+        self.page.evaluate(f"() => window.__apSet({x}, {z}, {radius})")
+    def ap_stop(self):
+        self.page.evaluate("() => window.__apStop()")
     def wait_state(self, timeout=120):
         t0 = time.time()
         while time.time() - t0 < timeout:
@@ -101,72 +222,35 @@ class Driver:
         raise RuntimeError("game never reached playing state")
 
     def move_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None):
-        """Walk or drive to one point. Steers on foot (camYaw) or in a car
-        (A/D); if wedged against a wall it backs up (car) or sidesteps (foot).
+        """Hand the target to the in-page autopilot and wait for arrival.
         stop_when(state) ends the move early — e.g. the moment an interact
         prompt appears, so the driver never has to land exactly on the point."""
         t0 = time.time()
-        last_progress = time.time()
-        last_x = last_z = None
-        reversing_until = 0
-        sidestep_until = 0
-        sidestep_dir = 1
+        self.ap_set(tx, tz, radius)
         polls = 0
-        while True:
-            s = self.state()
-            if s is None:
-                raise RuntimeError("lost __solmar handle")
-            if s["state"] == "over":
-                raise RuntimeError(f"game over while driving to {label or (tx, tz)}")
-            if stop_when and stop_when(s):
-                self.release_all()
-                return s
-            d = math.hypot(tx - s["x"], tz - s["z"])
-            if d <= radius:
-                self.release_all()
-                return s
-            polls += 1
-            if polls % 40 == 1:
-                self.note(f"  ... to {label or (tx, tz)}: pos=({s['x']:.0f},{s['z']:.0f}) "
-                          f"d={d:.0f} speed={s['speed']:.1f} inCar={s['inCar']} "
-                          f"state={s['state']} interact='{s['interact']}'")
-            if time.time() - t0 > timeout:
-                raise RuntimeError(f"timeout driving to {label or (tx, tz)} "
-                                   f"(still {d:.0f}m away, health {s['health']:.0f})")
-            now = time.time()
-            if last_x is None or math.hypot(s["x"] - last_x, s["z"] - last_z) > 1.5:
-                last_x, last_z, last_progress = s["x"], s["z"], now
-            desired = math.atan2(tx - s["x"], tz - s["z"])
-            if s["inCar"]:
-                diff = ang_diff(s["heading"], desired)
-                if now < reversing_until:
-                    self.key("KeyW", False); self.key("KeyS", True)
-                    self.key("KeyA", diff > 0); self.key("KeyD", diff <= 0)
-                else:
-                    self.key("KeyS", False)
-                    self.key("KeyW", True)
-                    self.key("KeyA", diff < -0.12); self.key("KeyD", diff > 0.12)
-                    if now - last_progress > 7 and abs(s["speed"]) < 2:
-                        # Wedged against something: back up, then try again.
-                        reversing_until = now + 2.0
-                        last_progress = now
-                        self.note(f"  stuck near ({s['x']:.0f},{s['z']:.0f}), reversing")
-            else:
-                if now < sidestep_until:
-                    # Sidestep around the wall, then re-aim.
-                    self.key("KeyW", True)
-                    self.key("KeyA", sidestep_dir < 0); self.key("KeyD", sidestep_dir > 0)
-                else:
-                    self.set_cam(desired)
-                    self.key("KeyW", True)
-                    self.key("ShiftLeft", d > 12)
-                    self.key("KeyA", False); self.key("KeyD", False)
-                    if now - last_progress > 6:
-                        sidestep_until = now + 1.5
-                        sidestep_dir = -sidestep_dir
-                        last_progress = now
-                        self.note(f"  stuck on foot near ({s['x']:.0f},{s['z']:.0f}), sidestepping")
-            time.sleep(0.15)
+        try:
+            while True:
+                s = self.state()
+                if s is None:
+                    raise RuntimeError("lost __solmar handle")
+                if s["state"] == "over":
+                    raise RuntimeError(f"game over while driving to {label or (tx, tz)}")
+                if stop_when and stop_when(s):
+                    return s
+                if s["apArrived"]:
+                    return s
+                d = math.hypot(tx - s["x"], tz - s["z"])
+                polls += 1
+                if polls % 10 == 1:
+                    self.note(f"  ... to {label or (tx, tz)}: pos=({s['x']:.0f},{s['z']:.0f}) "
+                              f"d={d:.0f} speed={s['speed']:.1f} inCar={s['inCar']} "
+                              f"state={s['state']} interact='{s['interact']}'")
+                if time.time() - t0 > timeout:
+                    raise RuntimeError(f"timeout driving to {label or (tx, tz)} "
+                                       f"(still {d:.0f}m away, health {s['health']:.0f})")
+                time.sleep(1.0)
+        finally:
+            self.ap_stop()
 
     def go_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None):
         """Follow the road grid to (tx,tz): waypoints at intersections, then
@@ -207,10 +291,12 @@ class Driver:
         raise RuntimeError("could not steal a car")
 
     def shootout(self, timeout=600):
-        """On foot at the pier: face the nearest living Vulture and hold the
-        trigger until all four are down. Returns when enemiesAlive == 0."""
+        """On foot at the pier: the autopilot aims at the nearest living
+        Vulture and holds the trigger until all four are down. The mouse is
+        also held for real, so the shot runs through the normal input path."""
         self.page.mouse.move(W // 2, H // 2)
         self.page.mouse.down()
+        self.page.evaluate("() => window.__apShoot(true)")
         t0 = time.time()
         try:
             while time.time() - t0 < timeout:
@@ -221,17 +307,10 @@ class Driver:
                     return s
                 if s["health"] < 25:
                     self.note(f"  WARNING: health {s['health']:.0f} in shootout")
-                e = min(s["enemies"], key=lambda e: (e["x"] - s["x"]) ** 2 + (e["z"] - s["z"]) ** 2)
-                d = math.hypot(e["x"] - s["x"], e["z"] - s["z"])
-                self.set_cam(math.atan2(e["x"] - s["x"], e["z"] - s["z"]))
-                # Close in if the shot keeps missing from far away.
-                if d > 26:
-                    self.key("KeyW", True)
-                else:
-                    self.key("KeyW", False)
-                time.sleep(0.3)
+                time.sleep(1.0)
             raise RuntimeError("shootout timed out")
         finally:
+            self.page.evaluate("() => window.__apShoot(false)")
             self.page.mouse.up()
             self.release_all()
 
@@ -258,6 +337,7 @@ def main():
             d.note(f"menu visible: {page.is_visible('#menu')}")
             page.click("#btn-start")
             s = d.wait_state()
+            d.install_autopilot()
             d.note(f"playing. objective: {s['objective']}")
             # How fast is the game clock running here?
             n0 = page.evaluate("() => window.__solmar.now")
