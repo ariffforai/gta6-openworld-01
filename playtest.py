@@ -312,6 +312,14 @@ class Driver:
                         self.note(f"  car stuck near ({s['x']:.0f},{s['z']:.0f}) but stars={s['stars']} — staying in the car")
                         t0 = time.time()
                         continue
+                    # Only step out near a road. Stepping out deep inside a
+                    # block puts the player in a building interior they
+                    # cannot walk out of (run r2x stuck at (-17,-15)).
+                    rx = round(s["x"] / 52) * 52; rz = round(s["z"] / 52) * 52
+                    if abs(s["x"] - rx) > 10 and abs(s["z"] - rz) > 10:
+                        self.note(f"  car stuck in a block near ({s['x']:.0f},{s['z']:.0f}) — not stepping out, keep driving")
+                        t0 = time.time()
+                        continue
                     # The car is wedged; abandon it and walk. The autopilot
                     # switches to on-foot mode on its own (pl.inCar false).
                     self.note(f"  car stuck on the way to {label or (tx, tz)} — stepping out to walk")
