@@ -24,7 +24,7 @@ os.makedirs(TMP, exist_ok=True)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8080)
-ap.add_argument("--viewport", default="960x540")
+ap.add_argument("--viewport", default="800x450")
 args = ap.parse_args()
 W, H = (int(v) for v in args.viewport.split("x"))
 BASE = f"http://127.0.0.1:{args.port}"
@@ -97,9 +97,11 @@ class Driver:
             time.sleep(0.5)
         raise RuntimeError("game never reached playing state")
 
-    def move_to(self, tx, tz, radius=5, timeout=900, label=""):
+    def move_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None):
         """Walk or drive to one point. Steers on foot (camYaw) or in a car
-        (A/D); if wedged against a wall it backs up (car) or sidesteps (foot)."""
+        (A/D); if wedged against a wall it backs up (car) or sidesteps (foot).
+        stop_when(state) ends the move early — e.g. the moment an interact
+        prompt appears, so the driver never has to land exactly on the point."""
         t0 = time.time()
         last_progress = time.time()
         last_x = last_z = None
@@ -112,6 +114,9 @@ class Driver:
                 raise RuntimeError("lost __solmar handle")
             if s["state"] == "over":
                 raise RuntimeError(f"game over while driving to {label or (tx, tz)}")
+            if stop_when and stop_when(s):
+                self.release_all()
+                return s
             d = math.hypot(tx - s["x"], tz - s["z"])
             if d <= radius:
                 self.release_all()
@@ -152,9 +157,9 @@ class Driver:
                         sidestep_dir = -sidestep_dir
                         last_progress = now
                         self.note(f"  stuck on foot near ({s['x']:.0f},{s['z']:.0f}), sidestepping")
-            time.sleep(0.3)
+            time.sleep(0.15)
 
-    def go_to(self, tx, tz, radius=5, timeout=900, label=""):
+    def go_to(self, tx, tz, radius=5, timeout=900, label="", stop_when=None):
         """Follow the road grid to (tx,tz): waypoints at intersections, then
         the final approach. Works on foot and in a car."""
         s = self.state()
@@ -162,14 +167,18 @@ class Driver:
         pts = road_route(s["x"], s["z"], tx, tz) if dist0 > 30 else [(tx, tz)]
         for i, (wx, wz) in enumerate(pts):
             r = radius if i == len(pts) - 1 else 7
-            self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}")
+            s = self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}", stop_when=stop_when)
+            if stop_when and stop_when(s):
+                return s
         return self.state()
 
     def drive_route(self, tx, tz, radius=5, timeout=900, label=""):
         return self.go_to(tx, tz, radius=radius, timeout=timeout, label=label)
 
     def steal_nearest_car(self, timeout=600):
-        """Walk to the nearest parked car and press E."""
+        """Walk to the nearest parked car and press E the moment the steal
+        prompt appears — the approach stops on the prompt, it does not have
+        to land exactly on the car's position first."""
         t0 = time.time()
         while time.time() - t0 < timeout:
             s = self.state()
@@ -182,9 +191,10 @@ class Driver:
                 s = self.state()
                 if s["inCar"]:
                     return s
-            else:
-                near = min(s["parked"], key=lambda c: (c["x"] - s["x"]) ** 2 + (c["z"] - s["z"]) ** 2)
-                self.go_to(near["x"], near["z"], radius=3.5, timeout=300, label="parked car")
+                continue
+            near = min(s["parked"], key=lambda c: (c["x"] - s["x"]) ** 2 + (c["z"] - s["z"]) ** 2)
+            self.go_to(near["x"], near["z"], radius=4.0, timeout=300, label="parked car",
+                       stop_when=lambda st: bool(st["interact"]))
         raise RuntimeError("could not steal a car")
 
     def shootout(self, timeout=600):
@@ -272,7 +282,8 @@ def main():
             if s["inCar"]:
                 page.keyboard.press("KeyE")  # step out
                 time.sleep(0.8)
-            d.go_to(120, 160.6, radius=3.5, timeout=300, label="coupe on foot")
+            d.go_to(120, 160.6, radius=4.0, timeout=300, label="coupe on foot",
+                    stop_when=lambda st: bool(st["interact"]))
             s = d.state()
             d.note(f"at the coupe on foot: interact='{s['interact']}'")
             page.keyboard.press("KeyE")
