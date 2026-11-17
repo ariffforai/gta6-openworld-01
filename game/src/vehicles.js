@@ -98,10 +98,14 @@ export class Car {
     // Drag + rolling resistance.
     this.speed -= this.speed * (handbrake ? 1.6 : 0.35) * dt;
     this.speed = clamp(this.speed, -10, maxSpd);
-    const steerTarget = steerInput * 0.55 * clamp(Math.abs(this.speed) / 8, 0, 1);
+    // Steering: tight enough to turn at a city intersection. The turn
+    // radius is 1 / (steer * headingFactor), so 0.65 * 0.085 gives ~18
+    // units — a 90-degree turn fits inside an intersection plus the road
+    // beyond it, instead of swinging the car into the buildings.
+    const steerTarget = steerInput * 0.65 * clamp(Math.abs(this.speed) / 8, 0, 1);
     this.steer = lerp(this.steer, steerTarget, 1 - Math.exp(-8 * dt));
     if (Math.abs(this.speed) > 0.05) {
-      this.heading += (this.steer * this.speed * 0.055) * dt * (this.speed < 0 ? -1 : 1);
+      this.heading += (this.steer * this.speed * 0.085) * dt * (this.speed < 0 ? -1 : 1);
     }
     const nx = this.x + Math.sin(this.heading) * this.speed * dt;
     const nz = this.z + Math.cos(this.heading) * this.speed * dt;

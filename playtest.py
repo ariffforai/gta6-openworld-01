@@ -78,7 +78,7 @@ AUTOPILOT_JS = """() => {
   window.__ap = {
     x: 0, z: 0, radius: 5, active: false, arrived: false, shoot: false,
     lastX: 0, lastZ: 0, lastProgress: 0, reverseUntil: 0,
-    sideUntil: 0, sideDir: 1,
+    sideUntil: 0, sideDir: 1, turning: false, turnUntil: 0,
   };
   window.__apSet = (x, z, radius) => {
     const ap = window.__ap;
@@ -136,9 +136,19 @@ AUTOPILOT_JS = """() => {
       let diff = desired - car.heading;
       while (diff > Math.PI) diff -= 2 * Math.PI;
       while (diff < -Math.PI) diff += 2 * Math.PI;
-      if (now < ap.reverseUntil) {
+      // Facing away from the target: three-point turn. Reverse while
+      // steering the same way as forward (D always raises the heading,
+      // forward or reverse) until the nose is roughly right, then drive.
+      // Give up after 6 s so a car wedged against something behind it
+      // cannot reverse forever.
+      if (Math.abs(diff) > 2.2 && Math.abs(car.speed) < 4) {
+        ap.turning = true; ap.turnUntil = now + 6;
+      }
+      if (ap.turning && Math.abs(diff) < 0.8) ap.turning = false;
+      if (ap.turning && now > ap.turnUntil) ap.turning = false;
+      if (ap.turning || now < ap.reverseUntil) {
         K['KeyW'] = false; K['KeyS'] = true;
-        K['KeyA'] = diff > 0; K['KeyD'] = diff <= 0;
+        K['KeyA'] = diff < -0.1; K['KeyD'] = diff > 0.1;
       } else {
         K['KeyS'] = false;
         // Keep the car around 8-12 u/s: fast enough to steer (steering
@@ -148,7 +158,7 @@ AUTOPILOT_JS = """() => {
         K['KeyW'] = Math.abs(car.speed) < 12;
         K['KeyA'] = diff < -0.1; K['KeyD'] = diff > 0.1;
         if (now - ap.lastProgress > 3 && Math.abs(car.speed) < 2) {
-          ap.reverseUntil = now + 2; ap.lastProgress = now;
+          ap.reverseUntil = now + 2.5; ap.lastProgress = now;
         }
       }
     } else {
@@ -259,7 +269,10 @@ class Driver:
         dist0 = math.hypot(tx - s["x"], tz - s["z"])
         pts = road_route(s["x"], s["z"], tx, tz) if dist0 > 30 else [(tx, tz)]
         for i, (wx, wz) in enumerate(pts):
-            r = radius if i == len(pts) - 1 else 7
+            # Intermediate waypoints use a wide radius so the car starts
+            # its (wide) turn at the intersection early, instead of
+            # overshooting into the building on the far side.
+            r = radius if i == len(pts) - 1 else 15
             s = self.move_to(wx, wz, radius=r, timeout=timeout, label=f"{label} wp{i}", stop_when=stop_when)
             if stop_when and stop_when(s):
                 return s
