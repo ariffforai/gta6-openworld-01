@@ -65,6 +65,8 @@ export class Player {
     car.stolen = true;
     this.mesh.visible = false;
     this.camDist = 11;
+    this.camYaw = car.heading;
+    car.syncMesh(0);
   }
   exitCar() {
     if (!this.inCar || !this.car) { this.inCar = false; this.car = null; return; }
@@ -149,6 +151,7 @@ export class Player {
     const handbrake = input.down('Space');
     const crashed = this.car.drive(throttle, steer, handbrake, dt, colliders);
     if (crashed && Math.abs(this.car.speed) > 6) this.damage(4, 0);
+    this.car.syncMesh(dt);
     this.x = this.car.x; this.z = this.car.z;
     this.heading = this.car.heading;
     // Chase camera follows the car's heading when driving forward.

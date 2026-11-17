@@ -256,14 +256,16 @@ function shoot() {
   for (const c of traffic.cars) targets.push(Object.assign(c, { kind: 'traffic', y: 0.8, radius: 2.4 }));
   const hit = combat.playerShoot(origin, dir, targets);
   audio.gunshot();
-  wanted.addCrime(4, now);
+  if (!shotName) wanted.addCrime(4, now);
   peds.scare(player.x, player.z, 30);
   if (!hit) return;
   if (hit.kind === 'ped') {
     peds.knockDown(hit.x, hit.z, 1.5);
-    wanted.addCrime(30, now);
-    hud.toast('You shot a civilian! The police are coming.', 3);
-    audio.wantedSting();
+    if (!shotName) {
+      wanted.addCrime(30, now);
+      hud.toast('You shot a civilian! The police are coming.', 3);
+      audio.wantedSting();
+    }
   } else if (hit.kind === 'enemy') {
     if (!hit.alive) hud.toast('Vulture down.', 1.5);
   } else if (hit.kind === 'police' || hit.kind === 'traffic') {
@@ -286,24 +288,28 @@ function shoot() {
 }
 
 function updatePolice(dt) {
-  const want = police.desiredCount(wanted.stars);
-  policeSpawnT -= dt;
-  if (wanted.stars > 0 && police.cars.length < want && policeSpawnT <= 0) {
-    policeSpawnT = 1.4;
-    police.spawnNear(player.x, player.z, player.heading);
+  // In staged screenshot mode the police stay as staged: they chase, but no
+  // new spawns, no heat changes and no bust — the shot must not end the game.
+  if (!shotName) {
+    const want = police.desiredCount(wanted.stars);
+    policeSpawnT -= dt;
+    if (wanted.stars > 0 && police.cars.length < want && policeSpawnT <= 0) {
+      policeSpawnT = 1.4;
+      police.spawnNear(player.x, player.z, player.heading);
+    }
+    let seen = false;
+    for (const c of police.cars) {
+      if (dist2(c.x, c.z, player.x, player.z) < 60 * 60) seen = true;
+    }
+    wanted.update(dt, seen, !player.inCar);
+    if (wanted.busted) endGame('busted');
   }
   police.removeFar(player.x, player.z, 260);
-  let seen = false;
-  for (const c of police.cars) {
-    if (dist2(c.x, c.z, player.x, player.z) < 60 * 60) seen = true;
-  }
-  wanted.update(dt, seen, !player.inCar);
   police.update(dt, player, city.colliders, (hard) => {
-    if (hard >= 1) {
+    if (hard >= 1 && !shotName) {
       if (player.damage(6, now)) audio.crash();
     }
   });
-  if (wanted.busted) endGame('busted');
 }
 
 function step(dt) {
@@ -341,8 +347,10 @@ function step(dt) {
     const runOver = peds.peds.find((p) => p.alive && dist2(player.car.x, player.car.z, p.x, p.z) < 2.2 * 2.2);
     if (runOver) {
       peds.knockDown(runOver.x, runOver.z, 2);
-      if (wanted.addCrime(22, now)) audio.wantedSting();
-      hud.toast('You hit a pedestrian!', 2.5);
+      if (!shotName) {
+        if (wanted.addCrime(22, now)) audio.wantedSting();
+        hud.toast('You hit a pedestrian!', 2.5);
+      }
     }
   } else {
     // On foot: traffic that runs into the player hurts him.
@@ -362,7 +370,7 @@ function step(dt) {
   updatePolice(dt);
   combat.update(dt, player.pos, (d) => {
     const chance = d < 25 ? 0.3 : d < 45 ? 0.14 : 0.05;
-    if (Math.random() < chance && player.damage(7, now)) audio.enemyShot();
+    if (!shotName && Math.random() < chance && player.damage(7, now)) audio.enemyShot();
   });
 
   // Mission logic.
