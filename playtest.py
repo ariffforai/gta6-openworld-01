@@ -78,7 +78,7 @@ AUTOPILOT_JS = """() => {
   window.__ap = {
     x: 0, z: 0, radius: 5, active: false, arrived: false, shoot: false,
     lastX: 0, lastZ: 0, lastProgress: 0, reverseUntil: 0,
-    sideUntil: 0, sideDir: 1, turning: false, turnUntil: 0,
+    sideUntil: 0, sideDir: 1, turning: false, turnUntil: 0, backUntil: 0,
   };
   window.__apSet = (x, z, radius) => {
     const ap = window.__ap;
@@ -180,7 +180,13 @@ AUTOPILOT_JS = """() => {
         }
       }
     } else {
-      if (now < ap.sideUntil) {
+      if (now < ap.backUntil) {
+        // Back away from the wall to make room, then re-aim. A player
+        // wedged in a building corner cannot strafe out; walking away
+        // from the target for a moment clears the corner.
+        pl.camYaw = desired + Math.PI;
+        K['KeyW'] = true; K['KeyA'] = K['KeyD'] = false;
+      } else if (now < ap.sideUntil) {
         K['KeyW'] = true;
         K['KeyA'] = ap.sideDir < 0; K['KeyD'] = ap.sideDir > 0;
       } else {
@@ -198,7 +204,7 @@ AUTOPILOT_JS = """() => {
         K['ShiftLeft'] = d > 12;
         K['KeyA'] = K['KeyD'] = false;
         if (now - ap.lastProgress > 4) {
-          ap.sideUntil = now + 1.2; ap.sideDir = -ap.sideDir; ap.lastProgress = now;
+          ap.backUntil = now + 1.5; ap.sideDir = -ap.sideDir; ap.lastProgress = now;
         }
       }
     }
