@@ -181,10 +181,16 @@ AUTOPILOT_JS = """() => {
       }
     } else {
       if (now < ap.backUntil) {
-        // Back away from the wall to make room, then re-aim. A player
-        // wedged in a building corner cannot strafe out; walking away
-        // from the target for a moment clears the corner.
-        pl.camYaw = desired + Math.PI;
+        // Back to the nearest road centreline to make room. A player
+        // wedged against a building face at the road's edge cannot
+        // strafe out, and walking away from the target only pushes them
+        // deeper into the wall — the centreline is open road.
+        const rx2 = Math.round(pl.x / 52) * 52, rz2 = Math.round(pl.z / 52) * 52;
+        if (Math.abs(pl.x - rx2) < Math.abs(pl.z - rz2)) {
+          pl.camYaw = Math.atan2(rx2 - pl.x, 0);
+        } else {
+          pl.camYaw = Math.atan2(0, rz2 - pl.z);
+        }
         K['KeyW'] = true; K['KeyA'] = K['KeyD'] = false;
       } else if (now < ap.sideUntil) {
         K['KeyW'] = true;
