@@ -120,8 +120,12 @@ export class Player {
       let px = this.x + nx * this.speed * dt;
       let pz = this.z + nz * this.speed * dt;
       // Building collision, axis-separated so he slides along walls.
+      // If he is already inside a building (stepped out of a car that
+      // was wedged against a wall), let him walk out instead of trapping
+      // him there: only block entering a building, never leaving one.
       let blockedX = false, blockedZ = false;
       for (const b of colliders) {
+        if (collideCircleBox(this.x, this.z, 0.6, b)) continue;
         const hitX = collideCircleBox(px, this.z, 0.6, b);
         const hitZ = collideCircleBox(this.x, pz, 0.6, b);
         if (hitX) blockedX = true;
