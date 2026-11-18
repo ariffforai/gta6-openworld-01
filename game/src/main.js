@@ -8,6 +8,9 @@ import { buildCity } from './city.js';
 import { createPlayer } from './player.js';
 import { createVehicles } from './vehicles.js';
 import { createInput } from './input.js';
+import { createPedestrians } from './pedestrians.js';
+import { createWanted } from './wanted.js';
+import { createCombat } from './combat.js';
 
 const el = (id) => document.getElementById(id);
 const show = (node, on) => {
@@ -52,6 +55,19 @@ const city = buildCity(scene);
 const player = createPlayer(scene, city);
 const vehicles = createVehicles(scene, city);
 const input = createInput(canvas);
+const pedestrians = createPedestrians(scene, city);
+const wanted = createWanted(scene, city, player, vehicles, {
+  onBusted: () => setState('busted'),
+  onWasted: () => setState('wasted'),
+});
+const combat = createCombat(scene, city, {
+  player,
+  vehicles,
+  pedestrians,
+  wanted,
+  canvas,
+  isPlaying: () => world.state === 'playing',
+});
 
 // --- game state ---------------------------------------------------------------
 const world = {
@@ -66,6 +82,8 @@ function setState(next) {
   world.state = next;
   show(el('screen-start'), next === 'menu');
   show(el('screen-pause'), next === 'paused');
+  show(el('screen-wasted'), next === 'wasted');
+  show(el('screen-busted'), next === 'busted');
   show(el('hud'), next === 'playing');
   if (next !== 'playing') input.unlock();
 }
@@ -83,6 +101,9 @@ function lockPointer() {
 
 function startGame() {
   player.reset();
+  pedestrians.reset();
+  wanted.reset();
+  combat.reset();
   setState('playing');
   lockPointer();
 }
@@ -132,8 +153,13 @@ function refreshHud() {
   if (money) money.textContent = `$${world.money}`;
   const health = el('health-value');
   if (health) health.textContent = `${Math.round(player.health)}`;
+  world.wanted = wanted.level;
   const stars = el('stars');
   if (stars) stars.textContent = '★'.repeat(world.wanted) + '☆'.repeat(5 - world.wanted);
+  const ammo = el('ammo-value');
+  if (ammo) {
+    ammo.textContent = combat.reloading ? 'RELOADING…' : `AMMO ${combat.ammo}`;
+  }
   const speed = el('speed-value');
   if (speed) {
     const kmh = Math.abs(vehicles.driven ? vehicles.driven.speed : player.speed) * 3.6;
@@ -167,6 +193,12 @@ function tick() {
   } else if (world.state === 'playing') {
     player.update(dt, input, camera);
     vehicles.update(dt, input, player, camera);
+    const playerSpeed = vehicles.driven
+      ? Math.abs(vehicles.driven.speed)
+      : player.speed;
+    pedestrians.update(dt, player.pos, playerSpeed);
+    wanted.update(dt, playerSpeed);
+    combat.update(dt, input, camera);
     city.update(dt);
     refreshHud();
   }
@@ -179,4 +211,4 @@ setState('menu');
 tick();
 
 // A handle for playtests and the screenshot scripts.
-window.__solmar = { world, player, vehicles, city, renderer, scene, camera };
+window.__solmar = { world, player, vehicles, city, pedestrians, wanted, combat, renderer, scene, camera };
