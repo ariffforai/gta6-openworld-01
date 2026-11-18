@@ -141,6 +141,8 @@ export function createVehicles(scene, city) {
     /** The car the player is driving, or null. */
     driven: null,
     enterCooldown: 0,
+    /** Fired with the impact speed (0-1) when the driven car hits a wall. */
+    onCrash: null,
 
     /** The nearest car to `pos` within `ENTER_RANGE`, or null. */
     nearestCar(pos) {
@@ -249,7 +251,12 @@ export function createVehicles(scene, city) {
       const nx = car.group.position.x + Math.sin(car.yaw) * car.speed * dt;
       const nz = car.group.position.z + Math.cos(car.yaw) * car.speed * dt;
       const fixed = collideCircle(nx, nz, 1.7, city.colliders);
-      if (fixed.x !== nx || fixed.z !== nz) car.speed *= -0.3;
+      if (fixed.x !== nx || fixed.z !== nz) {
+        // A hard wall hit bounces the car back and thuds.
+        const impact = Math.abs(car.speed);
+        car.speed *= -0.3;
+        if (impact > 10) vehicles.onCrash?.(impact / 26);
+      }
       car.group.position.x = clamp(fixed.x, city.bounds.minX, city.bounds.maxX);
       car.group.position.z = clamp(fixed.z, city.bounds.minZ, city.bounds.maxZ);
 

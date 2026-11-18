@@ -281,6 +281,7 @@ export function createWanted(scene, city, player, vehicles, callbacks) {
             vehicles.driven.speed *= 0.55;
           }
           cruiser.speed *= 0.4;
+          callbacks.onRam?.();
         }
 
         // Bust: at 3+ stars, a cruiser sitting on a stopped player

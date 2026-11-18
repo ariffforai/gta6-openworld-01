@@ -120,6 +120,7 @@ export function createCombat(scene, city, ctx) {
       combat.ammo -= 1;
       combat.cooldown = FIRE_INTERVAL;
       combat.shotsFired += 1;
+      ctx.onShot?.();
       wanted.addHeat(SHOT_HEAT);
       // The shot itself is loud: pedestrians near the shooter run.
       pedestrians.scare(player.pos.x, player.pos.z, 26);

@@ -14,6 +14,9 @@ import { createCombat } from './combat.js';
 import { createMissions } from './missions.js';
 import { createHud } from './hud.js';
 import { createSave } from './save.js';
+import { createAudio } from './audio.js';
+import { createShots } from './shots.js';
+import { createStashes } from './stashes.js';
 
 const el = (id) => document.getElementById(id);
 const show = (node, on) => {
@@ -58,10 +61,12 @@ const city = buildCity(scene);
 const player = createPlayer(scene, city);
 const vehicles = createVehicles(scene, city);
 const input = createInput(canvas);
+const audio = createAudio();
 const pedestrians = createPedestrians(scene, city);
 const wanted = createWanted(scene, city, player, vehicles, {
   onBusted: () => setState('busted'),
   onWasted: () => setState('wasted'),
+  onRam: () => audio.crash(1),
 });
 const combat = createCombat(scene, city, {
   player,
@@ -70,7 +75,9 @@ const combat = createCombat(scene, city, {
   wanted,
   canvas,
   isPlaying: () => world.state === 'playing',
+  onShot: () => audio.gunshot(),
 });
+vehicles.onCrash = (strength) => audio.crash(strength);
 
 // --- game state ---------------------------------------------------------------
 const world = {
@@ -95,7 +102,20 @@ missions = createMissions(scene, {
   setObjective: (text) => hud.setObjective(text),
 });
 const save = createSave({ world, player, missions });
-missions.onComplete = () => save.saveNow();
+missions.onComplete = () => {
+  save.saveNow();
+  audio.chime();
+};
+// Stashes need the HUD for their toast; shots need the finished systems.
+const stashes = createStashes(scene, {
+  world,
+  player,
+  toast: (text) => hud.toast(text),
+  chime: () => audio.chime(),
+});
+const shots = createShots({
+  world, player, vehicles, pedestrians, wanted, missions,
+});
 
 function setState(next) {
   world.state = next;
@@ -108,6 +128,7 @@ function setState(next) {
     missions.fail();
     save.saveNow();
   }
+  if (next !== 'playing' && next !== 'menu') audio.silence();
   if (next !== 'playing') input.unlock();
 }
 
@@ -129,6 +150,9 @@ function startGame() {
   combat.reset();
   missions.reset();
   save.applyOnStart();
+  stashes.reset();
+  shots.reset();
+  audio.unlock();
   setState('playing');
   lockPointer();
 }
@@ -159,6 +183,12 @@ document.addEventListener('pointerlockchange', () => {
 window.addEventListener('keydown', (event) => {
   if (event.code === 'KeyP' && (world.state === 'playing' || world.state === 'paused')) {
     togglePause();
+  }
+  if (event.code === 'KeyM') {
+    const muted = audio.toggleMute();
+    if (world.state === 'playing') {
+      hud.toast(muted ? 'Sound muted (M to unmute)' : 'Sound on');
+    }
   }
 });
 // Hiding the tab pauses the game instead of letting the clock jump.
@@ -191,6 +221,9 @@ function tick() {
     );
     camera.lookAt(0, 42, 0);
     city.update(dt);
+    audio.update(dt, {
+      speed01: 0, driving: false, wantedLevel: 0, music: true,
+    });
   } else if (world.state === 'playing') {
     player.update(dt, input, camera);
     vehicles.update(dt, input, player, camera);
@@ -204,6 +237,18 @@ function tick() {
     missions.update(dt);
     hud.update(dt);
     save.update(dt);
+    audio.update(dt, {
+      speed01: playerSpeed / 26,
+      driving: !!vehicles.driven,
+      wantedLevel: wanted.level,
+      music: true,
+    });
+    stashes.update(dt);
+    shots.update(dt);
+    if (shots.cameraPose) {
+      camera.position.copy(shots.cameraPose.pos);
+      camera.lookAt(shots.cameraPose.look);
+    }
   }
 
   input.endFrame();
@@ -214,4 +259,14 @@ setState('menu');
 tick();
 
 // A handle for playtests and the screenshot scripts.
-window.__solmar = { world, player, vehicles, city, pedestrians, wanted, combat, missions, hud, save, renderer, scene, camera };
+window.__solmar = { world, player, vehicles, city, pedestrians, wanted, combat, missions, hud, save, audio, shots, stashes, renderer, scene, camera };
+
+// Deterministic screenshot states: ?shot=cover|chase|mission|city poses
+// the world for one of the dossier screenshots. The game starts first,
+// then the shot is applied; __shotReady flips once it has rendered.
+window.__shotReady = false;
+const shotName = new URLSearchParams(window.location.search).get('shot');
+if (shotName && shots.has(shotName)) {
+  startGame();
+  shots.apply(shotName);
+}
