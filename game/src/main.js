@@ -1,7 +1,8 @@
 // SOLMAR — Streets of Fortune. Entry point: renderer, lights, the menu
 // orbit, the state machine (menu / playing / paused) and the main loop.
 // The world itself lives in the modules: city, player and vehicles here;
-// combat, missions, wanted, HUD, audio, save and screenshots join later.
+// combat, wanted, missions, HUD and save are wired in below, and audio
+// and screenshots join later.
 
 import * as THREE from 'three';
 import { buildCity } from './city.js';
@@ -11,6 +12,9 @@ import { createInput } from './input.js';
 import { createPedestrians } from './pedestrians.js';
 import { createWanted } from './wanted.js';
 import { createCombat } from './combat.js';
+import { createMissions } from './missions.js';
+import { createHud } from './hud.js';
+import { createSave } from './save.js';
 
 const el = (id) => document.getElementById(id);
 const show = (node, on) => {
@@ -78,8 +82,37 @@ const world = {
   menuAngle: 0,
 };
 
+// Missions, HUD and save (created here, after `world`, since all three
+// read it). The HUD hooks are late-bound through `hud` and `save` because
+// missions is created first but only calls them on ticks.
+let hud;
+let save;
+const missions = createMissions(scene, city, {
+  player,
+  vehicles,
+  wanted,
+  world,
+  toast: (text, secs) => hud?.toast(text, secs),
+  setObjective: (text) => hud?.setObjective(text),
+  onComplete: () => save?.saveNow(),
+});
+hud = createHud({
+  world,
+  player,
+  vehicles,
+  pedestrians,
+  wanted,
+  combat,
+  missions,
+  city,
+});
+save = createSave({ world, player, missions });
+
 function setState(next) {
   world.state = next;
+  // Being wasted or busted ends the run but not the progress: save the
+  // money and the finished jobs before the screens come up.
+  if ((next === 'wasted' || next === 'busted') && save) save.saveNow();
   show(el('screen-start'), next === 'menu');
   show(el('screen-pause'), next === 'paused');
   show(el('screen-wasted'), next === 'wasted');
@@ -104,6 +137,8 @@ function startGame() {
   pedestrians.reset();
   wanted.reset();
   combat.reset();
+  missions.reset();
+  save.applyOnStart();
   setState('playing');
   lockPointer();
 }
@@ -147,30 +182,6 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// --- HUD (the hud module owns this later; this keeps the bar live now) ------
-function refreshHud() {
-  const money = el('money-value');
-  if (money) money.textContent = `$${world.money}`;
-  const health = el('health-value');
-  if (health) health.textContent = `${Math.round(player.health)}`;
-  world.wanted = wanted.level;
-  const stars = el('stars');
-  if (stars) stars.textContent = '★'.repeat(world.wanted) + '☆'.repeat(5 - world.wanted);
-  const ammo = el('ammo-value');
-  if (ammo) {
-    ammo.textContent = combat.reloading ? 'RELOADING…' : `AMMO ${combat.ammo}`;
-  }
-  const speed = el('speed-value');
-  if (speed) {
-    const kmh = Math.abs(vehicles.driven ? vehicles.driven.speed : player.speed) * 3.6;
-    speed.textContent = `${Math.round(kmh)} km/h`;
-  }
-  const objective = el('objective-text');
-  if (objective && !objective.dataset.locked) {
-    objective.textContent = 'Explore Solmar — find work, steal a car, stay free';
-  }
-}
-
 // --- main loop ------------------------------------------------------------------
 const clock = new THREE.Clock();
 
@@ -199,8 +210,10 @@ function tick() {
     pedestrians.update(dt, player.pos, playerSpeed);
     wanted.update(dt, playerSpeed);
     combat.update(dt, input, camera);
+    missions.update(dt);
+    hud.update(dt);
+    save.update(dt);
     city.update(dt);
-    refreshHud();
   }
 
   input.endFrame();
@@ -211,4 +224,4 @@ setState('menu');
 tick();
 
 // A handle for playtests and the screenshot scripts.
-window.__solmar = { world, player, vehicles, city, pedestrians, wanted, combat, renderer, scene, camera };
+window.__solmar = { world, player, vehicles, city, pedestrians, wanted, combat, missions, hud, save, renderer, scene, camera };
