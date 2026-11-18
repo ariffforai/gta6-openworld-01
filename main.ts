@@ -1,14 +1,9 @@
-// SOLMAR — Streets of Fortune. The entrypoint: hand the game in.
-//
-// Copies this repository's game/ and screenshots/ into the output
-// directory and writes dossier.json there with the kit's buildDossier,
-// plus a plain-text summary for the judge. Node 22, standard library
-// only, no network, no clock: the same repository hands in the same
-// bytes on every run.
-//
-// One rule the grader forces: it mounts the output directory, so this
-// program must never remove the output directory itself. It clears only
-// what is inside it, then hands the game in.
+// SOLMAR — Streets of Fortune: the hand-in program.
+// This file copies the finished game (game/ and screenshots/) from the
+// repository into the output directory and writes the dossier the
+// scorer checks. Node 22, standard library only. It makes no network
+// request and reads no clock, so the same repository always hands in
+// the same bytes.
 //
 //   MAKEFUN_OUTPUT_DIR=out node main.ts
 
@@ -25,13 +20,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const REPO = dirname(fileURLToPath(import.meta.url));
+// The repository this file lives in, and where the hand-in goes.
+const ROOT = dirname(fileURLToPath(import.meta.url));
 const OUT = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-// The scorer's caps (the gate's gate.json): only text_max_bytes shapes
-// the dossier's bytes; the rest refuse an entry the scorer would refuse
-// (more than 4 screenshots or one over 256 KiB; more than 993 entries
-// in game/ or 48 MiB of game files; a game path over 1000 bytes).
+// The scorer's caps for this bounty (its gate): only text_max_bytes
+// changes the dossier's bytes; the rest refuse an entry the scorer
+// would refuse.
 const CAPS = {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
@@ -39,6 +34,27 @@ const CAPS = {
   game_max_bytes: 50331648,
   game_path_max_bytes: 1000,
 };
+
+/** Remove everything inside `dir` without removing `dir` itself. */
+function emptyDir(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  for (const name of readdirSync(dir)) {
+    rmSync(join(dir, name), { recursive: true, force: true });
+  }
+}
+
+/** Copy a directory tree, entries in sorted order, so the copy is stable. */
+function copyTree(src: string, dst: string): void {
+  mkdirSync(dst, { recursive: true });
+  const entries = readdirSync(src, { withFileTypes: true });
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    const from = join(src, entry.name);
+    const to = join(dst, entry.name);
+    if (entry.isDirectory()) copyTree(from, to);
+    else if (entry.isFile()) cpSync(from, to);
+  }
+}
 
 /** Every file under `dir`, in code-unit path order, with its size. */
 function listFiles(dir: string, rel = ''): { path: string; bytes: number }[] {
@@ -53,79 +69,47 @@ function listFiles(dir: string, rel = ''): { path: string; bytes: number }[] {
   return found;
 }
 
-/** Copy a directory tree, files in sorted order, so the copy is stable. */
-function copyTree(src: string, dst: string): void {
-  mkdirSync(dst, { recursive: true });
-  const entries = readdirSync(src, { withFileTypes: true });
-  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  for (const entry of entries) {
-    const from = join(src, entry.name);
-    const to = join(dst, entry.name);
-    if (entry.isDirectory()) copyTree(from, to);
-    else if (entry.isFile()) cpSync(from, to);
-  }
-}
-
-/**
- * Empty a directory without removing the directory itself. The grader
- * mounts the output directory, so removing it would fail with "device
- * or resource busy"; removing what is inside it always works.
- */
-function clearContents(dir: string): void {
-  mkdirSync(dir, { recursive: true });
-  for (const entry of readdirSync(dir)) {
-    rmSync(join(dir, entry), { recursive: true, force: true });
-  }
-}
-
-/** How many files and directories `dir` holds, counted the platform's way. */
-function countEntries(dir: string): number {
-  let n = 0;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    n++;
-    if (entry.isDirectory()) n += countEntries(join(dir, entry.name));
-  }
-  return n;
-}
-
-const GAME_DIR = join(REPO, 'game');
-const SHOTS_DIR = join(REPO, 'screenshots');
+const GAME_DIR = join(ROOT, 'game');
+const SHOTS_DIR = join(ROOT, 'screenshots');
 if (!existsSync(join(GAME_DIR, 'index.html'))) {
   throw new Error('game/index.html is missing: there is no game to hand in');
 }
 if (!existsSync(SHOTS_DIR)) {
   throw new Error('screenshots/ is missing: the game needs 3 or 4 screenshots');
 }
+const shotCount = readdirSync(SHOTS_DIR).filter((name) => !name.startsWith('.')).length;
+if (shotCount < 3 || shotCount > 4) {
+  throw new Error(`screenshots/ holds ${shotCount} images: the game needs 3 or 4`);
+}
 
-clearContents(OUT);
+// The grader mounts the output directory, so OUT itself must never be
+// removed — only its contents are cleared.
+emptyDir(OUT);
 copyTree(GAME_DIR, join(OUT, 'game'));
 copyTree(SHOTS_DIR, join(OUT, 'screenshots'));
 
 const gameFiles = listFiles(join(OUT, 'game'));
 const shotFiles = listFiles(join(OUT, 'screenshots'));
 const gameBytes = gameFiles.reduce((n, f) => n + f.bytes, 0);
-if (shotFiles.length < 3 || shotFiles.length > 4) {
-  throw new Error(`screenshots/ holds ${shotFiles.length} images: the game needs 3 or 4 screenshots`);
-}
 
 const summary = [
   'SOLMAR — Streets of Fortune',
-  'An original 3D open-world crime game in the browser, built with three.js.',
+  'An original open-world crime game that runs offline in a desktop browser.',
   '',
   `Game files: ${gameFiles.length} (${gameBytes} bytes)`,
   `Screenshots: ${shotFiles.map((f) => f.path).join(', ')}`,
   '',
-  'The city: a procedural 9x9-block city on a fixed seed — five districts,',
-  'the Solmar Tower landmark, a marina pier with a lighthouse, Coral Beach',
-  'and the sea, palms, plazas and drifting clouds.',
+  'A procedural 9x9-block city on a fixed seed: five districts, the Solmar',
+  'Tower, a marina pier with a lighthouse, Coral Beach and the sea, palms,',
+  'plazas and drifting clouds.',
   '',
-  'Systems: on-foot movement with sprint and jump, arcade driving with a',
-  'handbrake, 14 traffic cars and 9 parked cars to steal, 26 pedestrians,',
-  'a wanted level from 0 to 5 stars with police cruisers that chase and ram,',
-  'pistol combat, a three-mission story (The Pickup, Hot Wheels,',
-  'The Exchange), a HUD with money, health, armour, wanted stars, objective,',
-  'speedometer and a live circular minimap, start / pause / WASTED / BUSTED',
-  'screens, a localStorage save, and synthesised WebAudio sound and music.',
+  'On foot with sprint and jump, and arcade driving with a handbrake; 14',
+  'traffic cars and 9 parked cars to steal, 26 pedestrians, a wanted level',
+  'from 0 to 5 stars with police cruisers that chase and ram, pistol',
+  'combat, a three-mission story (The Pickup, Hot Wheels, The Exchange),',
+  'a HUD with money, health, armour, wanted stars, objective, speedometer',
+  'and a live circular minimap, start / pause / WASTED / BUSTED screens,',
+  'a localStorage save, and synthesised WebAudio sound and music.',
   '',
   'Controls: WASD move, mouse look, Shift sprint, Space jump / handbrake,',
   'E steal car / get out, click shoot, P pause.',
@@ -142,6 +126,14 @@ writeFileSync(join(OUT, 'dossier.json'), dossier);
 // The platform caps the whole hand-in at 1,000 entries (files and
 // directories together) and 64 MiB — refuse loudly if a future change
 // ever grows past it instead of handing in a bad entry.
+function countEntries(dir: string): number {
+  let n = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    n++;
+    if (entry.isDirectory()) n += countEntries(join(dir, entry.name));
+  }
+  return n;
+}
 const outEntries = countEntries(OUT);
 const outBytes = gameBytes
   + shotFiles.reduce((n, f) => n + f.bytes, 0)
