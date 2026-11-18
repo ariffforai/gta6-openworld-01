@@ -1,0 +1,35 @@
+# SOLMAR — Streets of Fortune: local and build artefacts.
+# Nothing in here is part of the game; the entry is game/, screenshots/,
+# main.ts, vendor/ and LICENSE.
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build and submission output
+out/
+dist/
+.output/
+
+# Local dev artefacts
+shots-tmp/
+*.log
+
+# Operating system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
