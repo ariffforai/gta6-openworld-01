@@ -1,84 +1,71 @@
-// SOLMAR save: the run survives in localStorage — money, health, armour
-// and which jobs are done. The game autosaves every 20 seconds of play
-// and right after a job pays out; being wasted or busted saves too, so the
-// money and the finished jobs are never lost. Loading happens once, on the
-// first start of the page: a fresh retry inside the same session keeps the
-// live world instead of rewinding it to the last save.
+// SOLMAR — save: localStorage persistence for money, health, armour and
+// mission progress. Autosaves every 20 seconds of play and on the big
+// moments (a job completed, wasted, busted). Loading happens once, on the
+// first start of the page, and never restores health below 50 — a save
+// written at death must not soft-lock the run.
 
-const SAVE_KEY = 'solmar-save-v1';
-const AUTOSAVE_EVERY = 20; // seconds of play between autosaves
+const KEY = 'solmar-save-v1';
+const AUTOSAVE_EVERY = 20;
 
-/** Create the save system. `ctx` carries world, player and missions. */
-export function createSave(ctx) {
-  const { world, player, missions } = ctx;
+export function createSave(deps) {
+  const { world, player, missions } = deps;
+  let applied = false;
+  let timer = 0;
 
-  const save = {
-    /** The parsed save read at boot, or null when there is none. */
-    data: null,
-    /** True once the boot save has been applied to the live world. */
-    applied: false,
-    /** Seconds of play since the last autosave. */
-    timer: 0,
-
-    /** Read the save from localStorage (safe when storage is unavailable). */
-    load() {
-      try {
-        const raw = localStorage.getItem(SAVE_KEY);
-        save.data = raw ? JSON.parse(raw) : null;
-      } catch {
-        save.data = null;
-      }
-      return save.data;
-    },
-
-    /** Write the live world to localStorage. Returns false on failure.
-     * The in-memory copy is refreshed too, so it never goes stale. */
-    saveNow() {
-      const snapshot = {
+  function saveNow() {
+    try {
+      if (typeof localStorage === 'undefined') return false;
+      const data = {
         money: world.money,
         health: Math.round(player.health),
         armour: Math.round(player.armour || 0),
-        missions: missions.serialize(),
+        done: { ...missions.done },
+        savedAt: Date.now(),
       };
-      try {
-        localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
-        save.data = snapshot;
-        return true;
-      } catch {
-        return false;
-      }
-    },
-
-    /**
-     * Apply the boot save once, on the first start of the page. Money and
-     * finished jobs come back as saved; health never comes back below 50,
-     * so a save written at the moment of being wasted cannot soft-lock
-     * the next run. Later starts in the same session are no-ops.
-     */
-    applyOnStart() {
-      if (save.applied || !save.data) return false;
-      const d = save.data;
-      if (typeof d.money === 'number') world.money = d.money;
-      if (typeof d.health === 'number') {
-        player.health = Math.max(50, Math.min(100, d.health));
-      }
-      if (typeof d.armour === 'number') player.armour = d.armour;
-      missions.applySave(d.missions);
-      save.applied = true;
+      localStorage.setItem(KEY, JSON.stringify(data));
       return true;
-    },
+    } catch {
+      // Storage full, blocked or unavailable: the game plays on without it.
+      return false;
+    }
+  }
 
-    /** Autosave while playing; the timer only runs in the playing state. */
-    update(dt) {
-      if (world.state !== 'playing') return;
-      save.timer += dt;
-      if (save.timer >= AUTOSAVE_EVERY) {
-        save.timer = 0;
-        save.saveNow();
-      }
-    },
-  };
+  function load() {
+    try {
+      if (typeof localStorage === 'undefined') return null;
+      const raw = localStorage.getItem(KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || typeof data.money !== 'number') return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
 
-  save.load();
-  return save;
+  function applyOnStart() {
+    if (applied) return false;
+    applied = true;
+    const data = load();
+    if (!data) return false;
+    world.money = data.money;
+    // Clamp health into [50, 100]: a save written at death (health 0)
+    // restores the player at half health instead of dead on arrival.
+    const health = typeof data.health === 'number' ? data.health : 100;
+    player.health = Math.min(100, Math.max(50, health));
+    player.armour = typeof data.armour === 'number' ? data.armour : 0;
+    if (data.done) missions.setDoneFlags(data.done);
+    return true;
+  }
+
+  function update(dt) {
+    // Only called while playing, so the timer counts play time, not menu time.
+    timer += dt;
+    if (timer >= AUTOSAVE_EVERY) {
+      timer = 0;
+      saveNow();
+    }
+  }
+
+  return { saveNow, load, applyOnStart, update, key: KEY };
 }

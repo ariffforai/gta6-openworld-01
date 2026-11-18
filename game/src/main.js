@@ -1,8 +1,7 @@
 // SOLMAR — Streets of Fortune. Entry point: renderer, lights, the menu
 // orbit, the state machine (menu / playing / paused) and the main loop.
 // The world itself lives in the modules: city, player and vehicles here;
-// combat, wanted, missions, HUD and save are wired in below, and audio
-// and screenshots join later.
+// combat, missions, wanted, HUD, audio, save and screenshots join later.
 
 import * as THREE from 'three';
 import { buildCity } from './city.js';
@@ -82,42 +81,33 @@ const world = {
   menuAngle: 0,
 };
 
-// Missions, HUD and save (created here, after `world`, since all three
-// read it). The HUD hooks are late-bound through `hud` and `save` because
-// missions is created first but only calls them on ticks.
-let hud;
-let save;
-const missions = createMissions(scene, city, {
-  player,
-  vehicles,
-  wanted,
-  world,
-  toast: (text, secs) => hud?.toast(text, secs),
-  setObjective: (text) => hud?.setObjective(text),
-  onComplete: () => save?.saveNow(),
+// Missions, HUD and save are built after `world` — they all read it. The
+// HUD is built first so missions can post toasts through it; the beacon
+// callback reads `missions` through a closure, filled in just below.
+let missions = null;
+const hud = createHud({
+  world, player, vehicles, city, pedestrians, wanted, combat,
+  getBeacons: () => (missions ? missions.beacons() : []),
 });
-hud = createHud({
-  world,
-  player,
-  vehicles,
-  pedestrians,
-  wanted,
-  combat,
-  missions,
-  city,
+missions = createMissions(scene, {
+  world, player, vehicles, wanted,
+  toast: (text) => hud.toast(text),
+  setObjective: (text) => hud.setObjective(text),
 });
-save = createSave({ world, player, missions });
+const save = createSave({ world, player, missions });
+missions.onComplete = () => save.saveNow();
 
 function setState(next) {
   world.state = next;
-  // Being wasted or busted ends the run but not the progress: save the
-  // money and the finished jobs before the screens come up.
-  if ((next === 'wasted' || next === 'busted') && save) save.saveNow();
   show(el('screen-start'), next === 'menu');
   show(el('screen-pause'), next === 'paused');
   show(el('screen-wasted'), next === 'wasted');
   show(el('screen-busted'), next === 'busted');
   show(el('hud'), next === 'playing');
+  if (next === 'wasted' || next === 'busted') {
+    missions.fail();
+    save.saveNow();
+  }
   if (next !== 'playing') input.unlock();
 }
 
@@ -210,10 +200,10 @@ function tick() {
     pedestrians.update(dt, player.pos, playerSpeed);
     wanted.update(dt, playerSpeed);
     combat.update(dt, input, camera);
+    city.update(dt);
     missions.update(dt);
     hud.update(dt);
     save.update(dt);
-    city.update(dt);
   }
 
   input.endFrame();
