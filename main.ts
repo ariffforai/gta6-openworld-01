@@ -65,8 +65,12 @@ if (!existsSync(SHOTS_DIR)) {
   throw new Error('screenshots/ is missing: the game needs 3 or 4 screenshots');
 }
 
-rmSync(OUT, { recursive: true, force: true });
+// The grader mounts the output directory, so OUT itself must never be
+// removed: clear only its contents, then hand the game in.
 mkdirSync(OUT, { recursive: true });
+for (const entry of readdirSync(OUT)) {
+  rmSync(join(OUT, entry), { recursive: true, force: true });
+}
 copyTree(GAME_DIR, join(OUT, 'game'));
 copyTree(SHOTS_DIR, join(OUT, 'screenshots'));
 
