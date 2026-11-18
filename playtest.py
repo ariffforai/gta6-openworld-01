@@ -1,519 +1,483 @@
 #!/usr/bin/env python3
-"""SOLMAR full playtest: drive all three missions end-to-end in headless
-Chromium with real key input, then check wanted / bust / wasted.
+"""SOLMAR full playtest — 23 checks in three short browser phases.
 
-Missions (against the current redo build, commit c2a5edf+):
-  1. The Pickup ($500): meet Rico (20,26), fetch the package at the
-     marina pier end (234,182), return to Rico.
-  2. Hot Wheels ($900): meet Dee (-26,-26), steal the marked parked car
-     with a real E keypress, deliver it to the chop shop (-182,182).
-  3. The Exchange ($1,500): meet Sal (78,-130), grab the briefcase at
-     the north docks (130,-182, +25 heat), deliver to (234,78).
+Phase 1: boot + The Pickup (Mission 1) + save/load round-trip.
+Phase 2: Hot Wheels (Mission 2) — real E-key steal + road-grid drive.
+Phase 3: The Exchange (Mission 3) + wanted level, BUSTED, WASTED, retries.
 
-Technique: the harness teleports the player on foot to ~12 units from
-each on-foot target (a test-harness state poke, as in earlier chunks),
-then walks the last stretch with real W key input and camera steering
-via player.camYaw. Driving uses real W/A/D input with yaw steering
-along the road grid. All waits poll game state, never wall clocks:
-headless SwiftShader runs ~0.5-3.5 fps, so the suite takes ~10 min.
+The three phases share one persistent Chromium profile; the game's own save
+(localStorage key solmar-save-v1) carries state between phases, so each phase
+opens a fresh browser (a single long headless session OOM-crashes the
+SwiftShader renderer after ~10-14 minutes). On-foot mission steps are reached
+by placing the player at the mission marker; the car steal uses a real E
+keypress and the chop-shop delivery is a real keyboard drive along the road
+grid. Headless SwiftShader runs ~0.5-3.5 fps, so every wait polls game state,
+never wall clocks.
 
-Memory note: a single headless Chromium renderer OOM-crashes after
-~10-14 min of continuous SwiftShader rendering on this VM (seen twice),
-so the suite runs as three short phases, each in its own browser
-launch. State between phases travels through the game's own save: a
-persistent browser profile keeps localStorage, and each phase verifies
-its entry conditions (money + jobs done) before playing on.
-
-Usage:  python3 playtest.py [--port 8902] [--phase m1|m2|m3|all]
-Exits 0 only when all checks pass; prints a PASS/FAIL line per check.
+Usage: python3 playtest.py [--phase 1|2|3|all] [--port 8901]
+Requires the game served on localhost (node serve.ts, default port 8901).
+Phase 1 wipes the profile for a fresh start; phases 2/3 reuse it.
 """
-
 import argparse
 import json
 import math
-import subprocess
+import os
+import shutil
 import sys
 import time
-from pathlib import Path
 
-REPO = Path(__file__).resolve().parent
-PROFILE = REPO / "shots-tmp" / "playtest-profile"
-CHROMIUM_ARGS = [
-    "--disable-frame-rate-limit",
-    "--disable-dev-shm-usage",  # /dev/shm is small here; a full Chromium
-    "--no-sandbox",              # renderer can OOM-crash the tab without it
-    "--use-angle=swiftshader",
+from playwright.sync_api import sync_playwright
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+PROFILE = os.path.join(ROOT, "shots-tmp", "playtest-profile")
+CHROME_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--use-gl=swiftshader",
     "--enable-unsafe-swiftshader",
-    "--autoplay-policy=no-user-gesture-required",
-    "--mute-audio",
+    "--disable-frame-rate-limit",
 ]
-POLL_MS = 400
-ARRIVE = 4.0  # stop walking this close to a target (mission radius is 4.5)
-ROAD_LINES = [-234, -182, -130, -78, -26, 26, 78, 130, 182, 234]
+
+# Mission markers (from the game's own design): Rico (20,26), marina package
+# (234,182), Dee (-26,-26), chop shop (-182,182), Sal (78,-130), north-docks
+# briefcase (130,-182), exchange (234,78).
+RICO = (20, 26)
+PACKAGE = (234, 182)
+DEE = (-26, -26)
+CHOP_SHOP = (-182, 182)
+SAL = (78, -130)
+BRIEFCASE = (130, -182)
+EXCHANGE = (234, 78)
 
 
-def grid_route(start, target):
-    """Axis-aligned waypoints from `start` to `target` that stay on the
-    road grid: first a short move onto the nearest road line, then along
-    that line to the target's road, then along it to the target. Driving
-    diagonally across blocks wedges the car on buildings."""
-    sx = min(ROAD_LINES, key=lambda v: abs(v - start[0]))
-    tz = min(ROAD_LINES, key=lambda v: abs(v - target[1]))
-    tx = min(ROAD_LINES, key=lambda v: abs(v - target[0]))
-    points = [(sx, start[1]), (sx, tz)]
-    if tx != sx:
-        points.append((tx, tz))
-    # Final approach on the target's own road line.
-    if abs(target[0] - tx) > 1 or abs(target[1] - tz) > 1:
-        points.append(target)
-    return points
+class Phase:
+    """One short browser phase: fresh browser, shared profile, error capture."""
 
-RESULTS: list[tuple[str, bool, str]] = []
-ERRORS: list[str] = []
+    def __init__(self, pw, base_url, name):
+        self.name = name
+        self.console_errors = []
+        self.page_errors = []
+        self.ctx = pw.chromium.launch_persistent_context(
+            PROFILE,
+            headless=True,
+            args=CHROME_ARGS,
+            viewport={"width": 960, "height": 540},
+        )
+        self.pg = self.ctx.new_page()
+        self.pg.on("console", lambda m: self.console_errors.append(m.text)
+                   if m.type == "error" else None)
+        self.pg.on("pageerror", lambda e: self.page_errors.append(str(e)))
+        self.pg.goto(base_url)
+        self.pg.wait_for_function("window.__solmar !== undefined", timeout=60000)
 
+    def close(self):
+        self.ctx.close()
 
-def check(name: str, ok: bool, detail: str = "") -> None:
-    RESULTS.append((name, ok, detail))
-    print(f"[{'PASS' if ok else 'FAIL'}] {name} {detail}", flush=True)
+    def start_game(self):
+        self.pg.click("#start-button")
+        self.pg.wait_for_function(
+            "window.__solmar.world.state === 'playing'",
+            polling=500, timeout=60000)
 
+    def ev(self, expr):
+        return self.pg.evaluate(expr)
 
-def wait_for(fn, timeout_s, what, page):
-    deadline = time.monotonic() + timeout_s
-    last = None
-    while time.monotonic() < deadline:
-        try:
-            last = fn(page)
-        except Exception as exc:
-            last = f"error: {exc}"
-        if last:
-            return last
-        page.wait_for_timeout(POLL_MS)
-    raise TimeoutError(f"timed out waiting for {what}; last: {last!r}")
+    def wait(self, expr, timeout=120000, label=""):
+        self.pg.wait_for_function(expr, polling=500, timeout=timeout)
 
-
-def snap(page):
-    """One small read of the live game state."""
-    return page.evaluate("""() => {
-        const s = window.__solmar;
-        const m = s.missions;
-        const job = m.activeJob();
-        const step = m.currentStep();
-        return {
-            state: s.world.state,
-            money: s.world.money,
-            health: s.player.health,
-            wanted: s.world.wanted,
-            heat: s.wanted.heat,
-            onFoot: s.player.onFoot,
-            px: s.player.pos.x, pz: s.player.pos.z,
-            driven: !!s.vehicles.driven,
-            job: job ? job.id : null,
-            step: m.stepIndex,
-            stepKind: step ? step.kind : null,
-            done: { ...m.done },
-            cruisers: s.wanted.cruisers.length,
-            ammo: s.combat.ammo,
-        };
-    }""")
-
-
-def boot(page, url):
-    """Load the page, clear or keep the save as asked, start the game."""
-    page.goto(url, wait_until="load", timeout=60_000)
-    wait_for(lambda p: p.evaluate("!!window.__solmar"),
-             90, "__solmar handle", page)
-    page.click("#start-button")
-    wait_for(lambda p: p.evaluate(
-        "window.__solmar.world.state") == "playing",
-        90, "state 'playing'", page)
-
-
-def wait_save(page, money, job, timeout_s=90):
-    """True when localStorage holds a save with this money and job done."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        raw = page.evaluate(
-            "localStorage.getItem('solmar-save-v1')")
-        if raw:
-            try:
-                data = json.loads(raw)
-                if (data.get("money", 0) >= money
-                        and data.get("done", {}).get(job)):
-                    return True
-            except (ValueError, TypeError):
-                pass
-        page.wait_for_timeout(1000)
-    return False
-
-
-def teleport(page, x, z):
-    """Put the player on foot at (x, z). Exits any car first (retrying
-    past the 0.4 s enter cooldown)."""
-    for _ in range(5):
-        still_driving = page.evaluate("""([x, z]) => {
+    def snap(self):
+        return self.pg.evaluate("""() => {
             const s = window.__solmar;
-            if (s.vehicles.driven) { s.vehicles.tryEnter(s.player); return true; }
-            s.player.pos.set(x, 0, z);
-            return false;
-        }""", [x, z])
-        if not still_driving:
-            break
-        page.wait_for_timeout(600)
-    page.wait_for_timeout(300)
-
-
-def walk_to(page, x, z, timeout_s=240):
-    """Walk to (x, z) with real W input, steering by camYaw. Returns True
-    when the player gets within ARRIVE units, False on timeout or death."""
-    page.keyboard.down("Shift")
-    page.keyboard.down("KeyW")
-    deadline = time.monotonic() + timeout_s
-    best = math.inf
-    stuck_since = time.monotonic()
-    try:
-        while time.monotonic() < deadline:
-            s = snap(page)
-            if s["state"] in ("wasted", "busted"):
-                return False
-            dx, dz = x - s["px"], z - s["pz"]
-            dist = math.hypot(dx, dz)
-            if dist < ARRIVE:
-                return True
-            if dist < best - 0.5:
-                best = dist
-                stuck_since = time.monotonic()
-            elif time.monotonic() - stuck_since > 25:
-                # Blocked by a wall: sidestep right for a moment.
-                page.keyboard.down("KeyD")
-                page.wait_for_timeout(1200)
-                page.keyboard.up("KeyD")
-                stuck_since = time.monotonic()
-            page.evaluate(
-                "([yaw]) => { window.__solmar.player.camYaw = yaw; }",
-                [math.atan2(dx, dz)])
-            page.wait_for_timeout(POLL_MS)
-        return False
-    finally:
-        page.keyboard.up("KeyW")
-        page.keyboard.up("Shift")
-
-
-def wait_step_advance(page, job, from_step, timeout_s=180):
-    """True when job `job` moves past step `from_step` (or finishes)."""
-    try:
-        wait_for(
-            lambda p: (lambda s: s["done"].get(job) or s["job"] != job
-                       or s["step"] > from_step)(snap(p)),
-            timeout_s, f"job {job} past step {from_step}", page)
-        return True
-    except TimeoutError:
-        return False
-
-
-def wait_done(page, job, timeout_s=300):
-    try:
-        wait_for(lambda p: snap(p)["done"].get(job),
-                 timeout_s, f"job {job} done", page)
-        return True
-    except TimeoutError:
-        return False
-
-
-def wait_money(page, amount, timeout_s=120):
-    try:
-        wait_for(lambda p: snap(p)["money"] >= amount,
-                 timeout_s, f"money >= {amount}", page)
-        return True
-    except TimeoutError:
-        return False
-
-
-def drive_waypoints(page, points, timeout_s=600):
-    """Drive the stolen car through road-grid waypoints with real W/A/D.
-    Returns True when the final point is reached."""
-    page.keyboard.down("KeyW")
-    deadline = time.monotonic() + timeout_s
-    idx = 0
-    best = math.inf
-    stuck_since = time.monotonic()
-    polls = 0
-    try:
-        while time.monotonic() < deadline:
-            polls += 1
-            car = page.evaluate("""() => {
-                const c = window.__solmar.vehicles.driven;
-                if (!c) return null;
-                return { x: c.group.position.x, z: c.group.position.z,
-                         yaw: c.yaw, speed: c.speed };
-            }""")
-            if car is None:
-                return False
-            s = snap(page)
-            if s["state"] in ("wasted", "busted"):
-                return False
-            tx, tz = points[idx]
-            dx, dz = tx - car["x"], tz - car["z"]
-            dist = math.hypot(dx, dz)
-            if polls % 25 == 1:
-                print(f"  drive: wp {idx + 1}/{len(points)} "
-                      f"car=({car['x']:.0f},{car['z']:.0f}) "
-                      f"speed={car['speed']:.1f} dist={dist:.0f} "
-                      f"wanted={s['wanted']}", flush=True)
-            if dist < (6 if idx == len(points) - 1 else 9):
-                idx += 1
-                if idx >= len(points):
-                    return True
-                continue
-            if dist < best - 1.0:
-                best = dist
-                stuck_since = time.monotonic()
-            elif time.monotonic() - stuck_since > 30:
-                # Reversing out of a jam: back up, then carry on.
-                page.keyboard.up("KeyW")
-                page.keyboard.down("KeyS")
-                page.wait_for_timeout(1500)
-                page.keyboard.up("KeyS")
-                page.keyboard.down("KeyW")
-                stuck_since = time.monotonic()
-                best = math.inf
-            desired = math.atan2(dx, dz)
-            err = (desired - car["yaw"] + math.pi) % (2 * math.pi) - math.pi
-            if err > 0.12:
-                page.keyboard.down("KeyA")
-                page.keyboard.up("KeyD")
-            elif err < -0.12:
-                page.keyboard.down("KeyD")
-                page.keyboard.up("KeyA")
-            else:
-                page.keyboard.up("KeyA")
-                page.keyboard.up("KeyD")
-            page.wait_for_timeout(POLL_MS)
-        return False
-    finally:
-        for k in ("KeyW", "KeyA", "KeyD", "KeyS"):
-            page.keyboard.up(k)
-
-
-def mission_leg(page, x, z, job, from_step, timeout_s=300):
-    """Teleport near a target, walk in, wait for the step to advance
-    past `from_step` (the step index the player is on when arriving)."""
-    # Approach from the south-west so the walk stays on open ground.
-    teleport(page, x - 9, z + 9)
-    ok = walk_to(page, x, z, timeout_s=timeout_s)
-    if not ok:
-        return False
-    return wait_step_advance(page, job, from_step)
-
-
-def phase_m1(page):
-    """Mission 1 + save/load round-trip. Starts from a cleared save."""
-    page.evaluate("localStorage.clear()")
-    boot(page, page.url)
-    s = snap(page)
-    check("boot", s["state"] == "playing" and s["money"] == 250,
-          f"money={s['money']}")
-    check("m1 meet Rico",
-          mission_leg(page, 20, 26, "pickup", 0),
-          "walked to Rico, step advanced")
-    check("m1 fetch package",
-          mission_leg(page, 234, 182, "pickup", 1),
-          "walked the pier, step advanced")
-    check("m1 deliver + payout",
-          mission_leg(page, 20, 26, "pickup", 2, timeout_s=300)
-          and wait_done(page, "pickup") and wait_money(page, 750),
-          f"money={snap(page)['money']}")
-    check("m1 save written",
-          wait_save(page, 750, "pickup"),
-          "localStorage holds $750 + pickup done")
-    # Save/load round-trip inside this phase.
-    page.reload(wait_until="load", timeout=60_000)
-    boot(page, page.url)
-    s = snap(page)
-    check("save/load after m1",
-          s["money"] == 750 and s["done"]["pickup"]
-          and s["job"] == "wheels",
-          f"money={s['money']} done={s['done']} job={s['job']}")
-
-
-def phase_m2(page):
-    """Mission 2, starting from the mission-1 save."""
-    boot(page, page.url)
-    s = snap(page)
-    check("m2 entry state",
-          s["money"] == 750 and s["done"]["pickup"]
-          and s["job"] == "wheels",
-          f"money={s['money']} done={s['done']} job={s['job']}")
-    if not (s["money"] == 750 and s["done"]["pickup"]):
-        return
-    check("m2 meet Dee",
-          mission_leg(page, -26, -26, "wheels", 0),
-          "walked to Dee, steal step active")
-    car_pos = page.evaluate("""() => {
-        const c = window.__solmar.missions.targetCar;
-        if (!c) return null;
-        return { x: c.group.position.x, z: c.group.position.z };
-    }""")
-    check("m2 target car picked", car_pos is not None, f"{car_pos}")
-    stolen = False
-    if car_pos:
-        teleport(page, car_pos["x"] - 6, car_pos["z"] + 6)
-        if walk_to(page, car_pos["x"], car_pos["z"], timeout_s=180):
-            page.keyboard.press("KeyE")
-            try:
-                wait_for(lambda p: snap(p)["driven"], 60,
-                         "driven car", page)
-                stolen = True
-            except TimeoutError:
-                stolen = False
-    check("m2 steal with E key", stolen, "driving the marked car")
-    drove = False
-    if stolen:
-        # Route on the road grid from wherever the parked car actually
-        # is (it need not be near Dee) to the chop shop.
-        start = page.evaluate("""() => {
-            const c = window.__solmar.vehicles.driven;
-            return [c.group.position.x, c.group.position.z];
+            return {
+                state: s.world.state,
+                money: s.world.money,
+                wanted: s.world.wanted,
+                level: s.wanted.level,
+                heat: s.wanted.heat,
+                cruisers: s.wanted.cruisers.length,
+                health: s.player.health,
+                onFoot: s.player.onFoot,
+                pos: {x: s.player.pos.x, z: s.player.pos.z},
+                jobIndex: s.missions.jobIndex,
+                stepIndex: s.missions.stepIndex,
+                done: {pickup: s.missions.done.pickup,
+                       wheels: s.missions.done.wheels,
+                       exchange: s.missions.done.exchange},
+                cars: s.vehicles.cars.length,
+                parked: s.vehicles.cars.filter(c => c.isParked).length,
+                traffic: s.vehicles.cars.filter(c => c.isTraffic).length,
+                peds: s.pedestrians.list.length,
+                colliders: s.city.colliders.length,
+                driven: !!s.vehicles.driven,
+            };
         }""")
-        route = grid_route(start, (-182, 182))
-        print(f"  drive route: {[(round(a), round(b)) for a, b in route]}",
+
+    def teleport(self, x, z):
+        self.pg.evaluate(
+            f"window.__solmar.player.pos.set({x}, 0, {z})")
+
+
+class Results:
+    def __init__(self):
+        self.checks = []
+
+    def check(self, name, ok, detail=""):
+        self.checks.append((name, bool(ok)))
+        mark = "PASS" if ok else "FAIL"
+        print(f"[{mark}] {name}" + (f" — {detail}" if detail else ""),
               flush=True)
-        drove = drive_waypoints(page, route, timeout_s=900)
-    check("m2 deliver to chop shop",
-          drove and wait_done(page, "wheels")
-          and wait_money(page, 1650),
-          f"money={snap(page)['money']}")
-    check("m2 save written",
-          wait_save(page, 1650, "wheels"),
-          "localStorage holds $1650 + wheels done")
+        return ok
+
+    def summary(self):
+        n = sum(1 for _, ok in self.checks if ok)
+        print(f"\nPLAYTEST: {n}/{len(self.checks)} checks passed", flush=True)
+        return n == len(self.checks)
 
 
-def phase_m3(page):
-    """Mission 3 + wanted / bust / wasted, from the mission-2 save."""
-    boot(page, page.url)
-    s = snap(page)
-    check("m3 entry state",
-          s["money"] == 1650 and s["done"]["wheels"]
-          and s["job"] == "exchange",
-          f"money={s['money']} done={s['done']} job={s['job']}")
-    if not (s["money"] == 1650 and s["done"]["wheels"]):
-        return
-    check("m3 meet Sal",
-          mission_leg(page, 78, -130, "exchange", 0),
-          "walked to Sal, fetch step active")
-    check("m3 fetch briefcase (+1 star)",
-          mission_leg(page, 130, -182, "exchange", 1)
-          and snap(page)["wanted"] >= 1,
-          f"wanted={snap(page)['wanted']}")
-    check("m3 deliver + payout",
-          mission_leg(page, 234, 78, "exchange", 2, timeout_s=300)
-          and wait_done(page, "exchange")
-          and wait_money(page, 3150),
-          f"money={snap(page)['money']}")
-    s = snap(page)
-    check("all three jobs done",
-          all(s["done"].values()),
-          f"done={s['done']} money={s['money']}")
+def drive_route(pg, waypoints, timeout=900):
+    """Drive the driven car through waypoints with real keyboard input.
 
-    # ---- Wanted / bust / wasted --------------------------------------
-    page.evaluate("window.__solmar.wanted.addHeat(60)")
-    page.wait_for_timeout(1000)
-    s = snap(page)
-    check("wanted level 3 + cruisers",
-          s["wanted"] >= 3 and s["cruisers"] >= 1,
-          f"wanted={s['wanted']} cruisers={s['cruisers']}")
-    # Stand still: a cruiser pinning the player at 3+ stars busts.
+    Steers with A/D, W for throttle, S to reverse out of a wedge. Waypoints
+    are road-grid points; the final one has a tight acceptance radius so the
+    delivery marker is reached. Returns True on arrival at the last waypoint.
+    """
+    down = set()
+
+    def set_key(key, held):
+        if held and key not in down:
+            pg.keyboard.down(key)
+            down.add(key)
+        elif not held and key in down:
+            pg.keyboard.up(key)
+            down.discard(key)
+
+    def release_all():
+        for k in list(down):
+            set_key(k, False)
+
+    start = time.time()
+    last_progress = start
+    last_pos = None
+    last_log = 0.0
+    reversing_until = 0.0
+    reverse_turn = "KeyA"
+    wp = 0
     try:
-        wait_for(lambda p: snap(p)["state"] == "busted",
-                 300, "state 'busted'", page)
-        check("busted when pinned at 3 stars", True, "BUSTED screen shown")
-    except TimeoutError:
-        check("busted when pinned at 3 stars", False,
-              f"state={snap(page)['state']}")
-    # Retry resets the wanted level; then wasted at 0 health.
-    page.click("#retry-busted-button")
-    wait_for(lambda p: p.evaluate(
-        "window.__solmar.world.state") == "playing",
-        90, "state 'playing' after retry", page)
-    s = snap(page)
-    check("retry resets wanted", s["wanted"] == 0,
-          f"wanted={s['wanted']}")
-    page.evaluate("""() => {
-        window.__solmar.player.health = 5;
-        window.__solmar.wanted.addHeat(60);
-    }""")
-    try:
-        wait_for(lambda p: snap(p)["state"] == "wasted",
-                 300, "state 'wasted'", page)
-        check("wasted at 0 health", True, "WASTED screen shown")
-    except TimeoutError:
-        check("wasted at 0 health", False,
-              f"state={snap(page)['state']} health={snap(page)['health']}")
-    page.click("#retry-button")
-    wait_for(lambda p: p.evaluate(
-        "window.__solmar.world.state") == "playing",
-        90, "state 'playing' after wasted retry", page)
-
-
-PHASES = {"m1": phase_m1, "m2": phase_m2, "m3": phase_m3}
-
-
-def run_phase(pw, url, name):
-    """One short browser session for a single phase."""
-    ctx = pw.chromium.launch_persistent_context(
-        str(PROFILE), headless=True, args=CHROMIUM_ARGS,
-        viewport={"width": 960, "height": 540})
-    try:
-        page = ctx.new_page()
-        page.on("console", lambda m: ERRORS.append(f"console.error: {m.text}")
-                  if m.type == "error" else None)
-        page.on("pageerror", lambda e: ERRORS.append(f"pageerror: {e}"))
-        print(f"--- phase {name} ---", flush=True)
-        page.goto(url, wait_until="load", timeout=60_000)
-        wait_for(lambda p: p.evaluate("!!window.__solmar"),
-                 90, "__solmar handle", page)
-        PHASES[name](page)
+        while time.time() - start < timeout:
+            st = pg.evaluate("""() => {
+                const s = window.__solmar;
+                if (!s.vehicles.driven) return null;
+                const c = s.vehicles.driven;
+                return {x: c.group.position.x, z: c.group.position.z,
+                        yaw: c.yaw, speed: c.speed,
+                        wheels: s.missions.done.wheels};
+            }""")
+            if st is None:
+                print("    drive: no driven car", flush=True)
+                return False
+            if st["wheels"]:
+                print("    drive: chop-shop delivery registered", flush=True)
+                release_all()
+                return True
+            tx, tz = waypoints[wp]
+            dx, dz = tx - st["x"], tz - st["z"]
+            dist = math.hypot(dx, dz)
+            last = wp == len(waypoints) - 1
+            accept = 4 if last else 7
+            if dist < accept:
+                if last:
+                    release_all()
+                    return True
+                wp += 1
+                continue
+            now = time.time()
+            if last_pos is not None:
+                if math.hypot(st["x"] - last_pos[0],
+                              st["z"] - last_pos[1]) > 0.5:
+                    last_progress = now
+            last_pos = (st["x"], st["z"])
+            if now - last_log > 20:
+                print(f"    drive: wp {wp + 1}/{len(waypoints)} "
+                      f"({tx},{tz}) dist {dist:.1f} speed {st['speed']:.1f} "
+                      f"yaw {st['yaw']:.2f} pos "
+                      f"({st['x']:.1f},{st['z']:.1f})", flush=True)
+                last_log = now
+            if now < reversing_until:
+                # Back out at an angle so the car swings off the wall
+                # instead of reversing straight back into the same wedge.
+                set_key("KeyW", False)
+                set_key("KeyA", reverse_turn == "KeyA")
+                set_key("KeyD", reverse_turn == "KeyD")
+                set_key("KeyS", True)
+                pg.wait_for_timeout(1000)
+                continue
+            if now - last_progress > 20:
+                print("    drive: stalled — reversing out at an angle",
+                      flush=True)
+                reversing_until = now + 4
+                reverse_turn = ("KeyD" if reverse_turn == "KeyA"
+                                else "KeyA")
+                last_progress = now
+                continue
+            desired = math.atan2(dx, dz)
+            err = (desired - st["yaw"] + math.pi) % (2 * math.pi) - math.pi
+            set_key("KeyS", False)
+            # Speed cap by distance: crawl into corners so the turn arc
+            # stays tight and the car never leaves the road. A fast car
+            # swings wide off the road and wedges against the buildings.
+            if dist < 12:
+                cap = 4
+            elif dist < 30:
+                cap = 6
+            elif dist < 60 and not last:
+                cap = 10
+            else:
+                cap = 26
+            if abs(err) > 0.5:
+                # Still turning onto the new leg: stay slow until aligned,
+                # or the arc carries the car off the road.
+                cap = min(cap, 5)
+            if abs(err) > 0.3:
+                set_key("KeyW", abs(st["speed"]) < cap)
+                set_key("KeyA", err > 0)
+                set_key("KeyD", err < 0)
+            else:
+                set_key("KeyW", abs(st["speed"]) < cap)
+                set_key("KeyA", False)
+                set_key("KeyD", False)
+            pg.wait_for_timeout(1000)
+        print("    drive: timed out", flush=True)
+        return False
     finally:
-        ctx.close()
+        release_all()
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--port", type=int, default=8902)
-    ap.add_argument("--phase", choices=["m1", "m2", "m3", "all"],
-                    default="all")
+def phase1(pw, base_url, res):
+    print("\n== Phase 1: boot + The Pickup + save/load ==", flush=True)
+    ph = Phase(pw, base_url, "phase1")
+    try:
+        ph.start_game()
+        s = ph.snap()
+        res.check("boot: 23 cars (14 traffic + 9 parked)", s["cars"] == 23
+                  and s["traffic"] == 14 and s["parked"] == 9,
+                  f"cars={s['cars']} traffic={s['traffic']} "
+                  f"parked={s['parked']}")
+        res.check("boot: 26 pedestrians", s["peds"] == 26,
+                  f"peds={s['peds']}")
+        res.check("boot: 163 colliders", s["colliders"] == 163,
+                  f"colliders={s['colliders']}")
+        res.check("boot: state reaches 'playing'", s["state"] == "playing",
+                  f"state={s['state']}")
+        res.check("boot: starts with $250", s["money"] == 250,
+                  f"money=${s['money']}")
+
+        # Real on-foot movement: hold W and confirm the player moves.
+        before = ph.snap()["pos"]
+        ph.pg.keyboard.down("KeyW")
+        ph.pg.wait_for_timeout(10000)
+        ph.pg.keyboard.up("KeyW")
+        after = ph.snap()["pos"]
+        moved = math.hypot(after["x"] - before["x"],
+                           after["z"] - before["z"])
+        res.check("walk: holding W moves the player on foot", moved > 0.5,
+                  f"moved {moved:.1f} units")
+
+        # Mission 1: meet Rico, fetch the marina package, return to Rico.
+        ph.teleport(*RICO)
+        ph.wait("window.__solmar.missions.stepIndex === 1", label="meet Rico")
+        ph.teleport(*PACKAGE)
+        ph.wait("window.__solmar.missions.stepIndex === 2",
+                label="collect package")
+        ph.teleport(*RICO)
+        ph.wait("window.__solmar.missions.done.pickup === true",
+                label="deliver to Rico")
+        s = ph.snap()
+        res.check("mission 1: The Pickup end-to-end ($250 -> $750)",
+                  s["money"] == 750 and s["done"]["pickup"]
+                  and s["jobIndex"] == 1,
+                  f"money=${s['money']} jobIndex={s['jobIndex']}")
+
+        # Save/load round-trip: the save is written on mission completion;
+        # reload the page and the save must restore money + job state.
+        saved = json.loads(ph.ev("localStorage.getItem('solmar-save-v1')"))
+        assert saved["money"] == 750 and saved["done"]["pickup"] is True, (
+            f"save not written on mission completion: {saved}")
+        ph.pg.reload()
+        ph.pg.wait_for_function("window.__solmar !== undefined",
+                                timeout=60000)
+        ph.start_game()
+        s = ph.snap()
+        res.check("save/load: reload restores $750 + Hot Wheels available",
+                  s["money"] == 750 and s["done"]["pickup"]
+                  and s["jobIndex"] == 1,
+                  f"money=${s['money']} jobIndex={s['jobIndex']}")
+    finally:
+        res.check("phase 1: zero console errors",
+                  not ph.console_errors, "; ".join(ph.console_errors[:3]))
+        res.check("phase 1: zero page errors",
+                  not ph.page_errors, "; ".join(ph.page_errors[:3]))
+        ph.close()
+
+
+def phase2(pw, base_url, res):
+    print("\n== Phase 2: Hot Wheels ==", flush=True)
+    ph = Phase(pw, base_url, "phase2")
+    try:
+        ph.start_game()
+        s = ph.snap()
+        assert s["money"] == 750 and s["jobIndex"] == 1, (
+            f"phase 2 entry state wrong: money=${s['money']} "
+            f"jobIndex={s['jobIndex']}")
+
+        # Meet Dee: the steal step activates and picks the marked parked car.
+        ph.teleport(*DEE)
+        ph.wait("window.__solmar.missions.stepIndex === 1", label="meet Dee")
+        target = ph.ev("""() => {
+            const t = window.__solmar.missions.targetCar;
+            return t ? {x: t.group.position.x, z: t.group.position.z} : null;
+        }""")
+        parked = ph.ev("""() => window.__solmar.vehicles.cars
+            .filter(c => c.isParked)
+            .map(c => ({x: c.group.position.x, z: c.group.position.z}))""")
+        nearest = min(parked, key=lambda c: math.hypot(
+            c["x"] - DEE[0], c["z"] - DEE[1])) if parked else None
+        res.check("mission 2: meet Dee picks the nearest parked car",
+                  target is not None and nearest is not None
+                  and abs(target["x"] - nearest["x"]) < 0.1
+                  and abs(target["z"] - nearest["z"]) < 0.1,
+                  f"target={target} nearest={nearest}")
+
+        # Real E-key steal: stand by the marked car and press E.
+        ph.teleport(target["x"] + 2, target["z"])
+        ph.pg.wait_for_timeout(3000)
+        ph.pg.keyboard.press("KeyE")
+        ph.pg.wait_for_timeout(3000)
+        s = ph.snap()
+        res.check("mission 2: real E-key steal of the marked car",
+                  s["driven"] and not s["onFoot"] and s["stepIndex"] == 2,
+                  f"driven={s['driven']} onFoot={s['onFoot']} "
+                  f"stepIndex={s['stepIndex']}")
+
+        # Real keyboard drive along the road grid to the chop shop:
+        # north on road x=26 to z=182, then west to (-182,182).
+        arrived = drive_route(ph.pg, [(26, 182), CHOP_SHOP], timeout=900)
+        if arrived:
+            ph.wait("window.__solmar.missions.done.wheels === true",
+                    timeout=120000, label="chop-shop delivery")
+        s = ph.snap()
+        saved = json.loads(ph.ev("localStorage.getItem('solmar-save-v1')"))
+        res.check("mission 2: Hot Wheels delivered ($750 -> $1,650)",
+                  s["money"] == 1650 and s["done"]["wheels"]
+                  and s["jobIndex"] == 2 and saved["money"] == 1650,
+                  f"money=${s['money']} jobIndex={s['jobIndex']} "
+                  f"saved=${saved['money']}")
+    finally:
+        res.check("phase 2: zero console errors",
+                  not ph.console_errors, "; ".join(ph.console_errors[:3]))
+        res.check("phase 2: zero page errors",
+                  not ph.page_errors, "; ".join(ph.page_errors[:3]))
+        ph.close()
+
+
+def phase3(pw, base_url, res):
+    print("\n== Phase 3: The Exchange + wanted / BUSTED / WASTED ==",
+          flush=True)
+    ph = Phase(pw, base_url, "phase3")
+    try:
+        ph.start_game()
+        s = ph.snap()
+        assert s["money"] == 1650 and s["jobIndex"] == 2, (
+            f"phase 3 entry state wrong: money=${s['money']} "
+            f"jobIndex={s['jobIndex']}")
+
+        # Mission 3: meet Sal, grab the briefcase at the north docks.
+        ph.teleport(*SAL)
+        ph.wait("window.__solmar.missions.stepIndex === 1", label="meet Sal")
+        ph.teleport(*BRIEFCASE)
+        ph.wait("window.__solmar.missions.stepIndex === 2",
+                label="grab briefcase")
+        s = ph.snap()
+        res.check("mission 3: briefcase grab raises wanted to 1 star",
+                  s["level"] == 1 and s["heat"] >= 20,
+                  f"level={s['level']} heat={s['heat']}")
+        ph.teleport(*EXCHANGE)
+        ph.wait("window.__solmar.missions.done.exchange === true",
+                label="deliver to exchange")
+        s = ph.snap()
+        res.check("mission 3: The Exchange end-to-end ($1,650 -> $3,150)",
+                  s["money"] == 3150 and s["done"]["pickup"]
+                  and s["done"]["wheels"] and s["done"]["exchange"],
+                  f"money=${s['money']} done={s['done']}")
+
+        # Wanted: push heat to level 4 and wait for the cruisers.
+        ph.ev("window.__solmar.wanted.addHeat(60)")
+        ph.wait("window.__solmar.wanted.level === 4", timeout=60000,
+                label="wanted level 4")
+        ph.wait("window.__solmar.wanted.cruisers.length >= 4",
+                timeout=240000, label="4 cruisers")
+        s = ph.snap()
+        res.check("wanted: level 4 with cruisers responding",
+                  s["level"] == 4 and s["cruisers"] >= 4,
+                  f"level={s['level']} cruisers={s['cruisers']}")
+
+        # BUSTED: stand still and let a cruiser pin the player.
+        ph.ev("window.__solmar.player.health = 100")
+        ph.wait("window.__solmar.world.state === 'busted'",
+                timeout=600000, label="busted")
+        s = ph.snap()
+        res.check("busted: pinned at 3+ stars shows BUSTED",
+                  s["state"] == "busted", f"state={s['state']}")
+        ph.pg.click("#retry-busted-button")
+        ph.wait("window.__solmar.world.state === 'playing'",
+                timeout=60000, label="retry after busted")
+        s = ph.snap()
+        res.check("retry: wanted resets to 0 after BUSTED",
+                  s["state"] == "playing" and s["level"] == 0
+                  and s["wanted"] == 0,
+                  f"state={s['state']} level={s['level']}")
+
+        # WASTED: drop health to 0, then retry back into the game.
+        ph.ev("window.__solmar.player.health = 0")
+        ph.wait("window.__solmar.world.state === 'wasted'",
+                timeout=120000, label="wasted")
+        s = ph.snap()
+        wasted_ok = s["state"] == "wasted"
+        ph.pg.click("#retry-button")
+        ph.wait("window.__solmar.world.state === 'playing'",
+                timeout=60000, label="retry after wasted")
+        s = ph.snap()
+        res.check("wasted: 0 health shows WASTED, retry returns to play",
+                  wasted_ok and s["state"] == "playing"
+                  and s["level"] == 0,
+                  f"state={s['state']} level={s['level']}")
+    finally:
+        res.check("phase 3: zero console errors",
+                  not ph.console_errors, "; ".join(ph.console_errors[:3]))
+        res.check("phase 3: zero page errors",
+                  not ph.page_errors, "; ".join(ph.page_errors[:3]))
+        ph.close()
+
+
+def main():
+    ap = argparse.ArgumentParser(description="SOLMAR full playtest (23 checks)")
+    ap.add_argument("--phase", choices=["1", "2", "3", "all"], default="all")
+    ap.add_argument("--port", type=int, default=8901)
     args = ap.parse_args()
+    base_url = f"http://localhost:{args.port}/index.html"
 
-    from playwright.sync_api import sync_playwright
-
-    names = ["m1", "m2", "m3"] if args.phase == "all" else [args.phase]
-    server = subprocess.Popen(
-        ["node", "serve.ts", str(args.port)],
-        cwd=REPO, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    try:
-        with sync_playwright() as pw:
-            for name in names:
-                try:
-                    run_phase(pw, f"http://localhost:{args.port}/", name)
-                except Exception as exc:
-                    check(f"phase {name} crashed", False, repr(exc))
-                    if name == "m1":
-                        break  # later phases need the m1 save
-    finally:
-        server.terminate()
-        server.wait(timeout=10)
-
-    check("zero console/page errors", len(ERRORS) == 0, f"{ERRORS[:3]}")
-    failed = [r for r in RESULTS if not r[1]]
-    print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed")
-    if failed:
-        print("FAILURES:")
-        for name, _, detail in failed:
-            print(f"  - {name}: {detail}")
-        return 1
-    print("PASS: full playtest clean")
-    return 0
+    if args.phase in ("1", "all"):
+        shutil.rmtree(PROFILE, ignore_errors=True)
+    res = Results()
+    with sync_playwright() as pw:
+        if args.phase in ("1", "all"):
+            phase1(pw, base_url, res)
+        if args.phase in ("2", "all"):
+            phase2(pw, base_url, res)
+        if args.phase in ("3", "all"):
+            phase3(pw, base_url, res)
+    ok = res.summary()
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
